@@ -1,0 +1,86 @@
+import sys
+import logging
+import numpy as np
+np.set_printoptions(threshold=sys.maxsize)
+import random
+import string
+
+import torch as th
+
+logger = logging.getLogger(__name__)
+
+def sample_action(action_probs):
+    action = np.random.choice(len(action_probs), p = action_probs)
+    return action
+
+
+def mask_actions(legal_actions, action_probs):
+    masked_action_probs = np.multiply(legal_actions, action_probs)
+    total = np.sum(masked_action_probs)
+    if total > 0:
+        masked_action_probs = masked_action_probs / total
+    return masked_action_probs
+
+
+def get_action_probs_sb3(model, observation):
+    """Extract action probabilities from an SB3 PPO model."""
+    obs = np.asarray(observation, dtype=np.float32)
+    obs_tensor = th.as_tensor(obs, dtype=th.float32, device=model.device)
+    if obs_tensor.ndim == 1:
+        obs_tensor = obs_tensor.unsqueeze(0)
+    dist = model.policy.get_distribution(obs_tensor)
+    probs = dist.distribution.probs.detach().cpu().numpy()
+    if probs.ndim > 1:
+        probs = probs[0]
+    return probs
+
+
+def get_value_sb3(model, observation):
+    """Extract value estimate from an SB3 PPO model."""
+    obs = np.asarray(observation, dtype=np.float32)
+    obs_tensor = th.as_tensor(obs, dtype=th.float32, device=model.device)
+    if obs_tensor.ndim == 1:
+        obs_tensor = obs_tensor.unsqueeze(0)
+    value = model.policy.predict_values(obs_tensor)
+    return value.item()
+
+
+class Agent():
+  def __init__(self, name, model = None):
+      self.name = name
+      self.id = self.name + '_' + ''.join(random.choice(string.ascii_lowercase) for x in range(5))
+      self.model = model
+      self.points = 0
+
+  def print_top_actions(self, action_probs):
+    top5_action_idx = np.argsort(-action_probs)[:5]
+    top5_actions = action_probs[top5_action_idx]
+    logger.debug(f"Top 5 actions: {[str(i) + ': ' + str(round(a,2))[:5] for i,a in zip(top5_action_idx, top5_actions)]}")
+
+  def choose_action(self, env, choose_best_action, mask_invalid_actions):
+      if self.name == 'rules':
+        action_probs = np.array(env.rules_move())
+        value = None
+      else:
+        action_probs = get_action_probs_sb3(self.model, env.observation)
+        value = get_value_sb3(self.model, env.observation)
+        logger.debug(f'Value {value:.2f}')
+
+      self.print_top_actions(action_probs)
+      
+      if mask_invalid_actions:
+        action_probs = mask_actions(env.legal_actions, action_probs)
+        logger.debug('Masked ->')
+        self.print_top_actions(action_probs)
+        
+      action = np.argmax(action_probs)
+      logger.debug(f'Best action {action}')
+
+      if not choose_best_action:
+          action = sample_action(action_probs)
+          logger.debug(f'Sampled action {action} chosen')
+
+      return action
+
+
+

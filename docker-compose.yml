@@ -10,6 +10,9 @@ services:
             - 6006:6006
         volumes:
             - ./app/:/app/
+            - ./tests/:/tests/
+            - ./:/workspace/
+        working_dir: /workspace
         tty: true
         container_name: selfplay
         cap_add:

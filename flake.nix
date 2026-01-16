@@ -1,97 +1,83 @@
 {
-  description = "hello world application using uv2nix";
+  description = "A minimal Python devshell without external dependencies";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-
-    pyproject-nix = {
-      url = "github:pyproject-nix/pyproject.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    uv2nix = {
-      url = "github:pyproject-nix/uv2nix";
-      inputs.pyproject-nix.follows = "pyproject-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    pyproject-build-systems = {
-      url = "github:pyproject-nix/build-system-pkgs";
-      inputs.pyproject-nix.follows = "pyproject-nix";
-      inputs.uv2nix.follows = "uv2nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
   };
 
-  outputs =
-    {
-      nixpkgs,
-      pyproject-nix,
-      uv2nix,
-      pyproject-build-systems,
-      ...
-    }:
+  outputs = { self, nixpkgs }:
     let
-      inherit (nixpkgs) lib;
-      forAllSystems = lib.genAttrs lib.systems.flakeExposed;
-
-      workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
-
-      overlay = workspace.mkPyprojectOverlay {
-        sourcePreference = "wheel";
-      };
-
-      editableOverlay = workspace.mkEditablePyprojectOverlay {
-        root = "$REPO_ROOT";
-      };
-
-      pythonSets = forAllSystems (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          python = pkgs.python3;
-        in
-        (pkgs.callPackage pyproject-nix.build.packages {
-          inherit python;
-        }).overrideScope
-          (
-            lib.composeManyExtensions [
-              pyproject-build-systems.overlays.wheel
-              overlay
-            ]
-          )
-      );
-
+      allSystems = [
+        "x86_64-linux" # 64-bit Intel/AMD Linux
+        "aarch64-linux" # 64-bit ARM Linux
+        "x86_64-darwin" # Intel macOS
+        "aarch64-darwin" # Apple Silicon macOS
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs allSystems;
     in
     {
-      devShells = forAllSystems (
-        system:
+      devShells = forAllSystems (system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
-          pythonSet = pythonSets.${system}.overrideScope editableOverlay;
-          virtualenv = pythonSet.mkVirtualEnv "SIMPLE_env" workspace.deps.all;
+          pkgs = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+            };
+          };
         in
         {
-          default = pkgs.mkShell {
-            packages = [
-              virtualenv
-              pkgs.uv
-            ];
-            env = {
-              UV_NO_SYNC = "1";
-              UV_PYTHON = pythonSet.python.interpreter;
-              UV_PYTHON_DOWNLOADS = "never";
+          default =
+            pkgs.mkShell rec {
+              shellPkgs = with pkgs; [
+                (python3.withPackages (python-pkgs: with python-pkgs; [
+                  pip
+                  virtualenv
+                  requests
+                  numpy
+                ]))
+                nodejs # For WebUI frontend (npm/npx)
+                poppler-utils # For Vibe Code PDF Processing
+                glib
+                libglvnd
+                zlib
+              ];
+
+              nativeBuildInputs = with pkgs; [ glib ];
+
+              packages = [
+                shellPkgs
+              ];
+
+              LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath shellPkgs}:${pkgs.stdenv.cc.cc.lib.outPath}/lib:$LD_LIBRARY_PATH";
+
+              shellHook = ''
+                echo "🐍 Python DevShell activated"
+                echo "Python version: $(python --version)"
+                export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.glib}/lib"
+              '';
+              env = {
+              };
             };
-            shellHook = ''
-              unset PYTHONPATH
-              export REPO_ROOT=$(git rev-parse --show-toplevel)
-            '';
+          }
+        );
+      apps = forAllSystems (system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+            };
+          };
+          trainScript = pkgs.writeShellScript "train-cubalibre-long" ''
+            exec ${pkgs.fish}/bin/fish ${./scripts/train_cubalibre_long.fish} "$@"
+          '';
+        in
+        {
+          train-cubalibre-long = {
+            type = "app";
+            program = "${trainScript}";
           };
         }
       );
-
-      packages = forAllSystems (system: {
-        default = pythonSets.${system}.mkVirtualEnv "SIMPLE_env" workspace.deps.default;
-      });
     };
 }

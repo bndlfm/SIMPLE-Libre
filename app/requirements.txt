@@ -1,0 +1,7 @@
+gymnasium
+stable-baselines3[extra]
+shimmy
+numpy
+jupyter==1.0.0
+jupyterlab==3.0.0
+pillow
