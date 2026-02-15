@@ -7,8 +7,8 @@ import time
 from shutil import copyfile
 
 import torch as th
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import EvalCallback
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from stable_baselines3.common.utils import set_random_seed
 
 from utils.callbacks import SelfPlayCallback
@@ -45,13 +45,20 @@ def main(args):
     env_kwargs["same_player_control"] = False
   env = selfplay_wrapper(base_env, env_kwargs=env_kwargs)(opponent_type = args.opponent_type, verbose = args.verbose)
 
-  CustomPolicy = get_network_arch(args.env_name)
+  policy_kwargs = get_network_arch(args.env_name)
 
-  if args.reset or not os.path.exists(os.path.join(model_dir, 'best_model.zip')):
-    logger.info('\nCreating new PPO agent to train...')
-    model = PPO(
-      CustomPolicy,
+  load_path = None
+  if hasattr(args, 'load') and args.load:
+    load_path = args.load
+  elif not args.reset and os.path.exists(os.path.join(model_dir, 'best_model.zip')):
+    load_path = os.path.join(model_dir, 'best_model.zip')
+
+  if load_path is None:
+    logger.info('\nCreating new MaskablePPO agent to train...')
+    model = MaskablePPO(
+      "MlpPolicy",
       env,
+      policy_kwargs=policy_kwargs,
       learning_rate=args.optim_stepsize,
       n_steps=args.timesteps_per_actorbatch,
       batch_size=args.optim_batchsize,
@@ -65,8 +72,8 @@ def main(args):
       device=device,
     )
   else:
-    logger.info('\nLoading the best_model.zip PPO agent to continue training...')
-    model = PPO.load(os.path.join(model_dir, 'best_model.zip'), env=env, device=device)
+    logger.info(f'\nLoading MaskablePPO agent from {load_path}...')
+    model = MaskablePPO.load(load_path, env=env, device=device)
     model.learning_rate = args.optim_stepsize
     model.n_steps = args.timesteps_per_actorbatch
     model.batch_size = args.optim_batchsize
@@ -92,7 +99,7 @@ def main(args):
 
   if args.rules:  
     logger.info('\nSetting up the evaluation environment against the rules-based agent...')
-    eval_actual_callback = EvalCallback(
+    eval_actual_callback = MaskableEvalCallback(
       eval_env = selfplay_wrapper(base_env, env_kwargs=env_kwargs)(opponent_type = 'rules', verbose = args.verbose),
       eval_freq=1,
       n_eval_episodes=args.n_eval_episodes,
@@ -125,6 +132,8 @@ def cli() -> None:
 
   parser.add_argument("--reset", "-r", action = 'store_true', default = False
                 , help="Start retraining the model from scratch")
+  parser.add_argument("--load", type = str, default = None
+                , help="Path to a .zip model to resume training from (overrides default best_model.zip)")
   parser.add_argument("--opponent_type", "-o", type = str, default = 'mostly_best'
               , help="best / mostly_best / random / base / rules - the type of opponent to train against")
   parser.add_argument("--debug", "-d", action = 'store_true', default = False

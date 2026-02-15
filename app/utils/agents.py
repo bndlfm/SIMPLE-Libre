@@ -19,6 +19,13 @@ def mask_actions(legal_actions, action_probs):
     total = np.sum(masked_action_probs)
     if total > 0:
         masked_action_probs = masked_action_probs / total
+    else:
+        # All legal actions have zero probability — fall back to uniform over legal actions
+        n_legal = np.sum(legal_actions)
+        if n_legal > 0:
+            masked_action_probs = legal_actions / n_legal
+    # Ensure probabilities sum to exactly 1.0 for np.random.choice
+    masked_action_probs = masked_action_probs / masked_action_probs.sum() if masked_action_probs.sum() > 0 else masked_action_probs
     return masked_action_probs
 
 

@@ -84,7 +84,7 @@ def selfplay_wrapper(env, env_kwargs=None):
 
             while self.current_player_num != self.agent_player_num:
                 self.render()
-                action = self.current_agent.choose_action(self, choose_best_action = False, mask_invalid_actions = False)
+                action = self.current_agent.choose_action(self, choose_best_action = False, mask_invalid_actions = True)
                 observation, reward, terminated, truncated, info = super(SelfPlayEnv, self).step(action)
                 done = terminated or truncated
                 logger.debug(f'Rewards: {reward}')
@@ -109,11 +109,15 @@ def selfplay_wrapper(env, env_kwargs=None):
                     observation, reward, terminated, truncated, info = package
                     done = terminated or truncated
 
-            # Extract per-player reward array from info (env returns scalar reward
-            # for current_player but includes full array in info['rewards']).
+            # Extract agent reward from per-player array.  The env may return:
+            #   - info["rewards"] (list) on main exit paths
+            #   - reward as a raw list on intermediate multi-step returns
+            #   - reward as a scalar float
             rewards = info.get("rewards") if info else None
             if rewards is not None:
                 agent_reward = float(rewards[self.agent_player_num])
+            elif isinstance(reward, (list, tuple)):
+                agent_reward = float(reward[self.agent_player_num])
             else:
                 agent_reward = float(reward)
             logger.debug(f'\nReward To Agent: {agent_reward}')

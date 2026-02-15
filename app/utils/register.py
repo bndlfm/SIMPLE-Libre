@@ -53,8 +53,11 @@ def get_network_arch(env_name):
         from models.frouge.models import CustomPolicy
         return CustomPolicy
     elif env_name in ('cubalibre'):
-        from models.cubalibre.models import CustomPolicy
-        return CustomPolicy
+        from models.cubalibre.models import CubaLibreExtractor
+        return dict(
+            features_extractor_class=CubaLibreExtractor,
+            features_extractor_kwargs=dict(features_dim=256),
+        )
     else:
         raise Exception(f'No model architectures found for {env_name}')
 

@@ -2181,6 +2181,10 @@ class CubaLibreEnv(gym.Env):
 
         return mask
 
+    def action_masks(self):
+        """Return boolean mask for MaskablePPO. True = action is valid."""
+        return np.array(self.legal_actions, dtype=bool)
+
     def step(self, action):
         reward = [0.0] * self.n_players; done = False
         player = self.players[self.current_player_num]
@@ -6460,6 +6464,7 @@ class CubaLibreEnv(gym.Env):
         for _ in range(4):
             self.board.add_piece(3, 0, 1); p.available_forces[1] -= 1
         self.current_player_num = 0; self.turns_taken = 0; self.done = False; self.capabilities = set()
+        self.deck_empty = False
         self.propaganda_cards_played = 0
         self.final_victory_margins_result = None
         self.final_victory_ranking_result = None
@@ -6467,9 +6472,22 @@ class CubaLibreEnv(gym.Env):
         self._pending_main = None
         self._pending_op_target = None
         self.keep_eligible_this_action = False
+        self._pending_cash_transfers = deque()
+        self._cash_transfer_waiting = False
+        self._cash_transfer_active = False
+        self._cash_transfer_return_player = None
+        self._cash_transfer_return_phase = None
+        self._cash_transfer_return_advance = False
         self.ineligible_through_next_card = set()
         self.ineligible_next_card = set()
         self.card_first_action = None
+        self._pending_event_target = None
+        self._pending_event_faction = None
+        self._pending_event_option = None
+        self._propaganda_in_progress = False
+        self._propaganda_final_round = False
+        self._pending_propaganda = None
+        self._pending_mafia_offensive = None
         self._pact_removed_bases_this_action = None
         self._refresh_campaign_tracks()
         self.draw_next_card(); self.update_turn_pointer()

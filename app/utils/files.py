@@ -9,7 +9,7 @@ import logging
 import numpy as np
 
 from shutil import rmtree
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 
 from utils.register import get_network_arch
 
@@ -47,7 +47,7 @@ def load_model(env, name):
         cont = True
         while cont:
             try:
-                ppo_model = PPO.load(filename, env=env)
+                ppo_model = MaskablePPO.load(filename, env=env)
                 cont = False
             except Exception as e:
                 time.sleep(5)
@@ -55,8 +55,7 @@ def load_model(env, name):
     
     elif name == 'base.zip':
         try:
-            PolicyClass = get_network_arch(env.name)
-            ppo_model = PPO(PolicyClass, env=env)
+            ppo_model = MaskablePPO("MlpPolicy", env=env)
             logger.info(f'Saving base.zip PPO model...')
             ppo_model.save(os.path.join(config.MODELDIR, env.name, 'base.zip'))
         except IOError as e:

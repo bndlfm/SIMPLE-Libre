@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from shutil import copyfile
 
-from stable_baselines3.common.callbacks import EvalCallback
+from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 
 from utils.files import get_best_model_name, get_model_stats
 
@@ -11,7 +11,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-class SelfPlayCallback(EvalCallback):
+class SelfPlayCallback(MaskableEvalCallback):
   def __init__(self, opponent_type, threshold, env_name, *args, **kwargs):
     super(SelfPlayCallback, self).__init__(*args, **kwargs)
     self.opponent_type = opponent_type
