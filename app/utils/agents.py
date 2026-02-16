@@ -10,7 +10,19 @@ import torch as th
 logger = logging.getLogger(__name__)
 
 def sample_action(action_probs):
-    action = np.random.choice(len(action_probs), p = action_probs)
+    # np.random.choice is extremely strict: probabilities must sum to exactly 1.0
+    p = np.asarray(action_probs, dtype=np.float64)
+    p = np.maximum(p, 0.0)  # clip any negative noise
+    total = p.sum()
+    if total > 0:
+        p = p / total
+    else:
+        p = np.ones_like(p) / len(p)
+    # Compensate for IEEE 754 rounding error by adjusting the largest element
+    remainder = 1.0 - p.sum()
+    if remainder != 0.0:
+        p[np.argmax(p)] += remainder
+    action = np.random.choice(len(p), p=p)
     return action
 
 

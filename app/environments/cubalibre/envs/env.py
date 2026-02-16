@@ -582,6 +582,17 @@ class CubaLibreEnv(gym.Env):
             return int(sp.pieces[5] + sp.pieces[6]) > 0
         return int(sp.pieces[8] + sp.pieces[9]) > 0
 
+    def _any_piece_present_for_faction(self, sp, faction_idx):
+        """Check if ANY piece (guerrillas/cubes AND bases) of a faction is in the space.
+        Per COIN 2018 rulebook, 'pieces' includes all faction components."""
+        if faction_idx == 0:
+            return int(sp.pieces[0] + sp.pieces[1] + sp.govt_bases) > 0
+        if faction_idx == 1:
+            return int(sp.pieces[2] + sp.pieces[3] + sp.pieces[4]) > 0
+        if faction_idx == 2:
+            return int(sp.pieces[5] + sp.pieces[6] + sp.pieces[7]) > 0
+        return int(sp.pieces[8] + sp.pieces[9] + sp.pieces[10]) > 0
+
     def _menoyo_un_remove_piece(self, sp, opt):
         if opt == 0 and sp.pieces[0] > 0:
             sp.pieces[0] -= 1
@@ -1557,7 +1568,19 @@ class CubaLibreEnv(gym.Env):
                         if has_troops and has_any_g:
                             target_mask[s_id] = 1
                     elif stage == "MOVE":
-                        mask[self._main_action_base + MAIN_PASS] = 1
+                        src = pending.get("src")
+                        faction = pending.get("faction")
+                        # Only allow PASS when all guerrillas have marched out
+                        if src is not None and faction is not None:
+                            src_sp_chk = self.board.spaces[int(src)]
+                            if faction == "M26":
+                                u_chk, a_chk = 2, 3
+                            elif faction == "DR":
+                                u_chk, a_chk = 5, 6
+                            else:
+                                u_chk, a_chk = 8, 9
+                            if int(src_sp_chk.pieces[u_chk] + src_sp_chk.pieces[a_chk]) == 0:
+                                mask[self._main_action_base + MAIN_PASS] = 1
                         src = pending.get("src")
                         faction = pending.get("faction")
                         if src is None or faction is None:
@@ -1745,12 +1768,13 @@ class CubaLibreEnv(gym.Env):
                     stage = pending.get("stage", "SPACE")
                     if stage == "SPACE":
                         p_idx = self.current_player_num
-                        u, a, b = (2,3,4) if p_idx == 1 else ((5,6,7) if p_idx == 2 else (8,9,10))
-                        has_ours = int(sp.pieces[u] + sp.pieces[a] + sp.pieces[b] + (sp.govt_bases if p_idx==0 else 0) + (sp.pieces[0]+sp.pieces[1] if p_idx==0 else 0)) > 0
-                        enemies = sum(sp.pieces) # Total pieces
-                        ours = sp.pieces[u] + sp.pieces[a] + sp.pieces[b]
-                        if p_idx == 0: ours = sp.pieces[0] + sp.pieces[1] + sp.govt_bases
-                        if has_ours and (enemies - ours) > 0:
+                        # Per 2018 rulebook: "pieces" includes bases
+                        has_ours = self._any_piece_present_for_faction(sp, p_idx)
+                        has_enemy = any(
+                            self._any_piece_present_for_faction(sp, f)
+                            for f in range(4) if f != p_idx
+                        )
+                        if has_ours and has_enemy:
                             target_mask[s_id] = 1
                 elif event == "MENOYO_UN":
                     # Within 1 space of Las Villas (5)
@@ -4226,7 +4250,7 @@ class CubaLibreEnv(gym.Env):
                         for f in range(4):
                             if f == p_idx:
                                 continue
-                            if self._piece_present_for_faction(sp, f):
+                            if self._any_piece_present_for_faction(sp, f):
                                 enemy_factions.append(f)
                         if not enemy_factions:
                             raise Exception("Defections (Un): no enemy pieces in selected space")
@@ -4259,7 +4283,17 @@ class CubaLibreEnv(gym.Env):
                         piece_opts.append(1)  # Active
 
                     if not piece_opts:
-                        raise Exception("Defections (Un): no enemy pieces of selected faction")
+                        # Enemy has only bases (no replaceable guerrillas/cubes) — event ends
+                        print(f" -> Defections (Un): enemy has no Guerrillas or cubes to replace.")
+                        player.eligible = False
+                        if not self.keep_eligible_this_action:
+                            self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        self._pending_event_target = None
+                        advance_turn = False
+                        return self.observation, reward, done, False, {}
 
                     if len(piece_opts) == 1:
                         # Important: if Govt is the acting faction and it has both Troops and Police available,
@@ -5077,7 +5111,19 @@ class CubaLibreEnv(gym.Env):
                     if int(sp.pieces[a_idx]) > 0:
                         piece_opts.append(1)
                     if not piece_opts:
-                        raise Exception("Defections (Un): no enemy pieces of selected faction")
+                        # Enemy has only bases — event ends gracefully
+                        print(f" -> Defections (Un): enemy has no Guerrillas or cubes to replace.")
+                        player = self.players[self.current_player_num]
+                        player.eligible = False
+                        if not self.keep_eligible_this_action:
+                            self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        self._pending_event_target = None
+                        self._pending_event_faction = None
+                        advance_turn = False
+                        return self.observation, reward, done, False, {}
 
                     self._pending_event_target = {"event": "DEFECTIONS_UN", "space": space_id, "enemy_faction": enemy, "remaining": 2}
                     self._pending_event_option = {

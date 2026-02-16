@@ -1,0 +1,495 @@
+# Cuba Libre 2018 Rules Engine Refactor (SIMPLE-Libre)
+
+This file documents the ongoing refactor to make `CubaLibreEnv` a **1:1 rules engine** for **Cuba Libre (2018)** (full campaign first), suitable for training a strong RL agent.
+
+The goal is that if a new chat is started, you can hand this file to the assistant and continue the work without losing context.
+
+## 0) Current scope / goal
+
+- Target ruleset: **Cuba Libre (2018)**
+- Scope now: **full campaign**
+- Future: add scenario support via setup modules (no changes to the core rules engine)
+- Bots: **only RL** (no COIN bot flow)
+- RL requirement: a **single policy** can act as any faction; multi-faction control is achieved by sampling the same policy on each faction’s turns.
+
+Authoritative spec:
+- `RULES_SPEC.md`
+
+## 1) Current state (baseline)
+
+### Repo entry points
+- `app/train.py` uses stable-baselines (PPO1) + MPI + a self-play wrapper.
+- `app/train_sb3.py` / `app/test_sb3.py` are SB3-based experiments.
+
+### Cuba Libre environment
+- Env is `app/environments/cubalibre/envs/env.py` (`class CubaLibreEnv`).
+- Event execution lives in `app/environments/cubalibre/envs/events.py`.
+- Event card text is in `app/environments/cubalibre/envs/data.py` (`EVENT_DECK_DATA`).
+
+### What was already fixed
+- `flake.nix` provides `pdftotext` via `poppler-utils`.
+- `app/environments/cubalibre/envs/data.py` was restored to full, non-truncated card text for 1–48 using the original source from `bndlfm/SIMPLE-CubaLibre`.
+  - Cards 11/13/18 have an intentionally blank second side in the original data (it is truly empty, not “Unplayable”).
+- Cash holder tracking and transfer choices are now explicit and covered by tests (including removal-triggered transfers).
+
+### Critical mismatches remaining (high level)
+- The game is **not yet 1:1** with 2018 rules: incomplete Op+SA / limited-op restrictions, and many events still use heuristic targeting.
+
+## 2) ✅ Refactor goal (turn structure + explicit decisions) - COMPLETE
+
+The COIN turn structure is fully implemented:
+
+- ✅ Each non-propaganda card reveals an **Eligibility order** (4 factions in order via `card.faction_order`)
+- ✅ The card is resolved by up to **two factions** (enforced via `card_action_slot >= 2`):
+  - ✅ 1st eligible faction acts (Pass, Event, or Op+SA)
+  - ✅ 2nd eligible faction acts based on what 1st did (Pass, Event, or Op only/limited) via `card_first_action` masking:
+    - If 1st took **Event**: 2nd may only take Limited Ops
+    - If 1st took **Ops**: 2nd may take Event or Limited Ops
+    - If 1st **Passed** or took **Illegal** action: 2nd may take Event or full Ops
+  - ✅ Then move to next card (via `update_turn_pointer()`)
+- ✅ Propaganda cards trigger a Propaganda round and reset eligibility (via `resolve_propaganda()`)
+
+
+Key decisions that are now implemented:
+- ✅ Choose between **Pass / Event / Ops** (via `PHASE_CHOOSE_MAIN`)
+- ✅ If Event: choose **Unshaded vs Shaded** (via `PHASE_CHOOSE_EVENT_SIDE`)
+- ✅ If Ops: choose operation type and its parameters (via `PHASE_CHOOSE_OP_ACTION`)
+- ✅ If Ops+SA: choose Special Activity where eligible (via `PHASE_CHOOSE_SPECIAL_ACTIVITY`)
+
+## 3) Strategy: phase-based “state machine” inside the env
+
+Instead of exploding the action space by encoding every composite move in a single integer, implement a **multi-step decision process**:
+
+- The environment has an internal `decision_phase` that changes during a turn.
+- Each call to `step(action)` consumes one decision and advances the phase.
+- `legal_actions` depends on the current phase and state.
+
+This keeps the action space manageable and allows complex decisions.
+
+### Proposed phases (draft)
+1. `PHASE_CHOOSE_MAIN`
+   - Actions: `PASS`, `PLAY_EVENT`, `PLAY_OPS`
+2. `PHASE_CHOOSE_EVENT_SIDE`
+   - Actions: `EVENT_UNSHADED`, `EVENT_SHADED`
+3. `PHASE_CHOOSE_OP`
+   - Actions: `OP_*` (train/sweep/etc for Govt; rally/march/etc for insurgents)
+4. `PHASE_CHOOSE_TARGET`
+   - Actions: `SPACE_0..SPACE_12` (or other parameter choices)
+5. `PHASE_CHOOSE_SPECIAL_ACTIVITY` (optional)
+   - Actions: `SA_*` or `SKIP_SA`
+6. `PHASE_RESOLVE`
+   - Apply the chosen effect(s) and return to phase 1 for next eligible faction.
+
+Not every action requires every phase. Example:
+- `PASS` resolves immediately from `PHASE_CHOOSE_MAIN`.
+- `EVENT_*` resolves after `PHASE_CHOOSE_EVENT_SIDE` (and maybe target selection if needed).
+
+## 4) Action encoding (draft)
+
+Keep `gymnasium.spaces.Discrete(N)` for SB3 compatibility.
+
+Suggested encoding ranges (example):
+- `0..2`: main choice (`PASS`, `EVENT`, `OPS`)
+- `10..11`: event side (`UNSHADED`, `SHADED`)
+- `20..(20+num_ops-1)`: op choice (a small set)
+- `100..112`: space choice (13 spaces)
+- `200..(200+num_sa-1)`: special activity choice
+
+These exact ranges can change, but the key is:
+- easy to mask per phase
+- stable numeric mapping
+
+## 5) Eligibility / card flow refactor
+
+### Current situation
+- `CubaLibreEnv.draw_next_card()` draws a card and sets `self.current_card`.
+- `update_turn_pointer()` advances `current_player_num` by scanning `current_card.faction_order` and checking `player.eligible`.
+- `self.factions_acted_this_card` is used to force a new card after 2 actions.
+
+### Required changes
+- Track per-card state more explicitly:
+  - `eligible_order` (from card)
+  - `who_already_acted_this_card`
+  - `slot` = 1st eligible action vs 2nd eligible action
+  - rules for “limited ops” depending on slot
+
+### Proposed fields
+- `self.card_action_count` (0, 1, 2)
+- `self.card_first_actor` / `self.card_second_actor`
+- `self.current_actor_index` (which faction is currently deciding)
+- `self.decision_phase`
+- `self.pending_choice` structure (what has been selected so far)
+
+### Step flow sketch
+- At start of a card: everyone is eligible.
+- Determine the first actor = first in order.
+- Actor goes through phase machine to complete their action.
+- Mark that actor ineligible (unless the event says stay eligible).
+- Determine second actor = next eligible in order.
+- Second actor acts (with limited constraints).
+- Move to next card.
+
+## 6) Event execution changes
+
+### Current situation
+- `resolve_event(env, card_id)` chooses side based on faction.
+
+### Required change
+- Event resolution must be called with an explicit side selection:
+  - `resolve_event(env, card_id, side)` where `side` is `UNSHADED` or `SHADED`.
+
+This side selection becomes a phase decision (`PHASE_CHOOSE_EVENT_SIDE`).
+
+Also, in the long run, some events require target selection; that will add an additional phase for those events.
+
+## 7) Action masking
+
+### Current situation
+- `env.legal_actions` returns a mask for the current single-step action model.
+
+### Required changes
+- `legal_actions` must depend on `decision_phase`.
+- Provide separate mask logic per phase:
+  - in `PHASE_CHOOSE_MAIN`, only allow `{PASS, EVENT, OPS}`.
+  - in `PHASE_CHOOSE_EVENT_SIDE`, only allow `{UNSHADED, SHADED}` (and possibly only allow the side that exists for cards with blank text).
+  - etc.
+
+**Note:** SB3 standard PPO does not support masks natively; this repo already had masking logic in older code paths. We may need:
+- either to continue using custom masking logic (sampling from legal actions)
+- or switch to a maskable algorithm/policy (future work)
+
+## 8) Compatibility impacts
+
+### `train_sb3.py` / SB3
+- Still expects a fixed Discrete action space.
+- Multi-step decisions are OK as long as:
+  - observation includes enough info for the current phase
+  - illegal actions are masked or penalized
+
+### self-play wrapper
+- The wrapper assumes reward alignment per “turn”.
+- With multi-phase turns, we must decide whether:
+  - each sub-decision is a step (recommended)
+  - or aggregate multiple sub-decisions internally and only step once (harder)
+
+## 9) Near-term work items (detailed steps)
+
+### ✅ Step A: Introduce decision phases and pending action state (COMPLETED)
+1. ✅ Added `self.phase` to `CubaLibreEnv` and initialize it in `reset()`.
+2. ✅ Added `self._pending_main` to track main choice (Event vs Ops).
+   - Full `pending` structure deferred for now; current implementation uses phase transitions directly.
+
+### ✅ Step B: Replace `legal_actions` with phase-based mask (COMPLETED)
+3. ✅ Implemented `legal_actions` as phase-dependent switch:
+   - `PHASE_CHOOSE_MAIN`: returns mask for `{PASS, EVENT, OPS}`
+   - `PHASE_CHOOSE_EVENT_SIDE`: returns mask for `{UNSHADED, SHADED}` based on card data
+
+### ✅ Step C: Phase 1 tracks + derived victory markers (COMPLETED)
+1. ✅ Implemented 2018 campaign starting values:
+   - Aid starts at 15
+   - Resources start at Govt 15 / M26 10 / DR 5 / Syndicate 15
+   - US Alliance starts at Firm
+   - Havana start forces updated to 6 Troops + 4 Police
+2. ✅ Added explicit Aid track (`env.aid`) and included it in observation.
+3. ✅ Implemented US Alliance as a 3-level track (Firm/Reluctant/Embargoed) and updated Govt COIN op cost accordingly.
+4. ✅ Implemented derived edge-track victory markers (no stored counters):
+   - Total Support
+   - Opposition + Bases
+   - DR Pop + Bases
+   - Open Casinos
+   Included these in the observation header.
+
+### ✅ Step D: Phase 1 Aid/US Alliance event correctness (COMPLETED)
+1. ✅ Refactored events that change Aid to update `env.aid` (clamped 0-49) rather than mutating Govt resources as a proxy.
+2. ✅ Refactored events that shift US Alliance to use the 3-level enum.
+3. ✅ Fixed remaining old-scale embargo check for Air Strike legality.
+4. ✅ Added tests for Aid/Alliance event behavior and derived victory marker equations.
+5. ✅ Broke a circular import by moving shared track constants to `app/environments/cubalibre/envs/constants.py`.
+
+### ✅ Step E: Phase 1 Propaganda Round procedure (IMPLEMENTED; ongoing verification)
+Implemented a rule-anchored 2018 Propaganda flow in `CubaLibreEnv.resolve_propaganda()`:
+- ✅ 6.1 Victory Phase (7.2) using derived markers and the rulebook thresholds.
+- ✅ 6.2.1 Government Earnings:
+  - marks Sabotage on ECs where (M26+DR Guerrillas) > (Govt cubes)
+  - Govt Resources += (sum econ of unsabotaged ECs) + Aid
+- ✅ 6.2.2 Insurgent Earnings:
+  - M26 Resources += number of M26 Bases
+  - DR Resources += number of spaces with any DR pieces
+  - Syndicate Resources += City population (where Syn guerrillas > Police) + unsabotaged EC econ (where Syn guerrillas > Police) + 2×open casinos
+- ✅ 6.2.3 The Skim:
+  - For each space with any open Casinos, transfer 2 Resources from Syndicate to the controlling faction (if other than Syndicate)
+  - If `Trafficante_Shaded` is in effect, any Underground Syn guerrilla in a space blocks Skim there
+- ✅ 6.3.1 US Alliance test:
+  - if Total Support <= 18: worsen US Alliance 1 level (if possible) and Aid -10 (min 0)
+- ✅ 6.5 Reset (partial):
+  - set all factions eligible
+  - clear Terror and Sabotage markers
+  - flip all Guerrillas to Underground
+  - clear "until Propaganda" capabilities via centralized expiring capability list
+
+Tests:
+- ✅ Added `tests/cubalibre/test_propaganda.py` covering Govt earnings econ+Aid + sabotage exclusion and the US Alliance/Aid degradation trigger.
+- ✅ Added `tests/cubalibre/test_propaganda_insurgent_earnings_and_skim.py` covering 6.2.2 and 6.2.3 (including `Trafficante_Shaded` block behavior).
+ - ✅ Added `tests/cubalibre/test_propaganda_redeploy_and_final.py` covering 6.4 Redeploy menu flow (police, mandatory troops, optional troops) and final-round exceptions.
+
+Remaining gaps to implement for full 2018 fidelity:
+ - (Propaganda procedure) Remaining gaps now mostly around higher-fidelity choices and target selection for certain events; additional edge-case verification is still pending.
+
+Implemented since last update:
+- ✅ 6.4 Redeploy phase (deterministic policy, rule-shaped constraints)
+  - 6.4.1 Police relocation into ECs or Govt-Controlled spaces (implemented as deterministic relocation of only invalid Police)
+  - 6.4.2 Mandatory Troops redeploy out of ECs and Provinces without Govt Bases into Govt-Controlled Cities or Govt Bases (fallback Havana)
+  - ✅ 6.4.3 Optional other Troops redeploy (agent-driven via redeploy menu)
+- ✅ 6.5 Reset improvements
+  - Added per-space `closed_casinos` state; events now open/close casinos explicitly
+  - Final Propaganda round omits Redeploy and Reset (6.3.5)
+- ✅ 6.2.4 Cash Deposits
+  - Added per-space `cash` markers (ownership counts)
+  - Implemented deterministic cash deposit conversion (base/casino if possible else +6 resources)
+  - Added tests for cash deposits and Raúl momentum Aid effect on Kidnap
+4. ✅ Mask forbids choosing blank event sides (cards 11/13/18 shaded side).
+5. ✅ Meyer Lansky (38) now uses agent-driven choices with stacking-aware casino relocation and cash transfer constraints; cash holders are modeled per piece and transfers move holders without changing ownership.
+6. ✅ Added explicit cash holder tracking (per piece) so transfers (Meyer Lansky and general cash rules) move holders without changing ownership.
+7. ✅ Cash holder removal now triggers explicit transfer choices (including assault/airstrike/transport paths) with end-to-end tests.
+
+### Event cards: audit notes (rules text vs code)
+
+### ✅ Step C: Refactor `step()` to advance phases (COMPLETED)
+5. ✅ In `PHASE_CHOOSE_MAIN`:
+   - Pass → gain Resources (Govt +3, others +1), do not increment `card_action_slot`
+   - Event → advance to `PHASE_CHOOSE_EVENT_SIDE`
+   - Ops → advance to `PHASE_CHOOSE_OP_ACTION`
+6. ✅ In `PHASE_CHOOSE_EVENT_SIDE`:
+   - calls `resolve_event(env, card_id, play_shaded)` with explicit side
+   - marks player ineligible, increments `card_action_slot`, returns to `PHASE_CHOOSE_MAIN`
+7. ✅ In `PHASE_CHOOSE_OP_ACTION`:
+   - decodes op and space from action
+   - executes op implementation
+   - transitions to `PHASE_CHOOSE_SPECIAL_ACTIVITY` (optional SA or skip)
+
+7b. ✅ In `PHASE_CHOOSE_SPECIAL_ACTIVITY`:
+   - reuses `MAIN_PASS` as "skip special activity" (no action-space expansion)
+   - allows selecting a Special Activity using existing op×space action ids
+   - then marks player ineligible, increments `card_action_slot`, returns to `PHASE_CHOOSE_MAIN`
+
+8. ✅ Added `PHASE_CHOOSE_LIMITED_OP_ACTION` (Option B):
+   - second actor enters Limited Ops via a dedicated action id
+   - Limited Ops mask excludes Special Activities
+
+### Step D: Rewrite card flow / eligibility (PARTIALLY COMPLETE)
+10. ✅ Card order pointer: `_card_order_index` ensures the next actor follows `current_card.faction_order` (does not restart scanning from the top).
+11. ✅ Card action slot counter: `card_action_slot` drives “first vs second actor” and card advancement after 2 actions.
+12. ✅ Full 2018 eligibility/limited-op rules implemented (rules-policy layer):
+    - First actor Event → second actor may do Limited Ops only.
+    - First actor Ops → second actor may do Event or Limited Ops.
+    - First actor Pass/Illegal → second actor may do Event or full Ops.
+    - Limited Ops excludes Special Activities.
+    - One Event per card is enforced by masking.
+13. ✅ Explicit per-card actor tracking:
+    - `card_first_actor` and `card_second_actor` are recorded when the slot-0 and slot-1 actors are selected.
+14. ✅ Illegal actions consume an action slot:
+    - illegal `step()` increments `card_action_slot` (and thus advances toward the next card).
+15. ✅ Event-driven “stay eligible” support:
+    - `env.keep_eligible_this_action` controls NEXT-card eligibility only.
+    - Acting faction still becomes ineligible for the remainder of the current card after acting.
+
+16. ✅ Cross-card eligibility semantics:
+    - `ineligible_next_card`: factions that acted (or passed/illegal) become ineligible on the next card.
+    - `ineligible_through_next_card`: events can force a faction to be ineligible through the next card (applies on next draw, then clears).
+
+17. ✅ Implement 2.3.6 Launder:
+    - After a 1st/2nd Eligible Faction pays for an Operation (incl. LimOp) and executes no Special Activity, allow removing 1 Cash marker to execute an additional free LimOp (any type except Construct).
+    - Support: either acting faction removes its own Cash, or a different faction removes its own Cash to enable the acting faction.
+    - Enforce: at most 1 such Cash marker benefit per card.
+    - Note: Construct is allowed as a paid Limited Operation (2.3.5), but is never free (2.3.6 / 3.3.5) and is therefore forbidden for the Launder-granted free LimOp.
+    - Tests: `tests/cubalibre/test_launder.py` (includes paid-LimOp Construct allowed and Launder-free Construct excluded).
+
+### ✅ Step E: Update `events.py` API (COMPLETED)
+13. ✅ Changed `resolve_event(env, card_id)` → `resolve_event(env, card_id, play_shaded)`.
+14. ✅ Updated call site in `env.py` step() phase 1.
+
+### ✅ Step F: Observations (COMPLETED)
+15. ✅ Observation now includes phase + card id + acting faction context (plus per-space pieces/terror/alignment).
+
+### ✅ Step G: Cards 1–4 + capability cleanup + tests (COMPLETED)
+16. ✅ Cards 1–4 were improved for fidelity (within current limitation of no explicit target-selection UI for all events).
+17. ✅ Capability duration cleanup is centralized in `resolve_propaganda()` and clears known until-Propaganda capabilities.
+18. ✅ Tests were migrated to `tests/` and legacy scripts removed; unittest discovery passes.
+
+### ✅ Step H: Agent-driven target selection (PARTIALLY COMPLETE)
+19. ✅ Added `PHASE_CHOOSE_TARGET_SPACE` (agent selects a space via a masked action region).
+20. ✅ Added `PHASE_CHOOSE_TARGET_FACTION` (agent selects a faction via a masked action region).
+21. ✅ Converted events to explicit targeting (no heuristic auto-targets):
+    - Armored Cars (Un): select destination space, then select adjacent source space
+    - Eulogio Cantillo (Un): select Troops+Guerrillas space; select faction; select adjacent destination
+    - Rebel Air Force (Un): select ambush space
+    - Rebel Air Force (Sh): select faction (M26 vs DR)
+    - General Strike (Sh): select which City is affected
+    - S.I.M (Un): select Support space with no Police
+    - Election (Sh): select which City is set to Neutral
+    - Fat Butcher (Un): select which Casino to close (or Aid -8 if none)
+    - Fat Butcher (Sh): select ambush space
+    - MAP (Un): select which cube space to replace
+    - Llano (Sh): select which City to affect
+    - Fangio (Sh): select 2 casino spaces; for each choose open vs place Cash; if placing Cash, select owning faction among factions with a cube/guerrilla there
+22. ✅ Converted key Ops/LimOps to explicit multi-step targeting:
+    - Govt Transport: select destination, then select source space
+    - Insurgent March: select destination, then select source space
+23. ✅ Added/updated tests covering masking + phase transitions for these targeting decisions.
+
+### 🔁 Handoff (next context window)
+
+Latest work completed:
+- Fangio (Sh): Cash markers are faction-owned. After choosing the "place Cash" option, agent selects the owning faction among factions with a cube/guerrilla in that space.
+- Eulogio Cantillo (Un): now a 3-step agent flow (pick Troops+Guerrillas source space -> pick faction -> pick adjacent destination). Moves all that faction's guerrillas and leaves them Underground.
+- General Strike (Sh): no longer hardcoded to Havana; agent selects the City.
+- S.I.M (Un): agent selects the Support+no-Police space.
+- Election (Sh): agent selects the City; resolves to Neutral + Aid +10.
+
+New/updated tests added:
+- test_fangio_shaded_two_spaces_option_choice.py (now includes cash-owner faction selection)
+- test_cantillo_unshaded_targeting.py
+- test_general_strike_shaded_target_selection.py
+- test_sim_unshaded_target_selection.py
+- test_election_shaded_target_selection.py
+
+Immediate next candidates:
+- Heuristic cleanup: remaining single-target events with "pick first" logic in events.py (e.g., Sanchez Mosquera (Un), etc.)
+- Medium refactor: split pending event vs pending ops target phases (reduce shared PHASE_CHOOSE_TARGET_SPACE complexity)
+
+### Phase 1: 2018 core tracks + Propaganda + victory (NEXT)
+20. Add additional Propaganda/victory edge-case tests (especially Govt victory conditions and tie-break ordering).
+21. Final Propaganda victory margin checks (7.3): add tests around margin calculation and tie resolution after the last Propaganda round.
+22. Final-round tie-resolution order (7.1/7.3): add tests for margin ties (Non-player > Syndicate > DR > 26July > Govt).
+
+Completed since last update:
+- Added Propaganda victory edge-case tests for threshold boundaries and winner priority (`tests/cubalibre/test_propaganda_victory_checks.py`).
+- Added tie-priority coverage for multi-faction victory conditions (Govt > M26 > DR > Syndicate), including Govt ties vs DR and Syndicate.
+- Added final-round Propaganda timing test for resolve_propaganda skipping resources/redeploy/reset (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+- Added final Propaganda Victory Phase early-exit test per 2.4.1 (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+- Added final Propaganda no-victory Support Phase-only timing test per 2.4.1/6.3.5 (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+- Added final Propaganda no-victory Redeploy/Reset skip test for mandatory troop sources (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+- Added final Propaganda victory margin formula setup test per 7.3 (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+- Added final-round tie-resolution tests per 7.1/7.3 with new `victory_margins`/`final_victory_ranking` helpers (`tests/cubalibre/test_final_victory_margin_ties.py`).
+- Added final Propaganda end-state test for stored victory results (`tests/cubalibre/test_propaganda_redeploy_and_final.py`).
+
+## 10) Current Status
+
+### What was implemented
+- **Phase-based decision model**: `PHASE_CHOOSE_MAIN` → `PHASE_CHOOSE_EVENT_SIDE` / `PHASE_CHOOSE_OP_ACTION` → `PHASE_CHOOSE_SPECIAL_ACTIVITY`
+- **Expanded action space** (with Option B Limited Ops appended + targeting regions): `Discrete(699)`
+  - Actions 0-2: main choice (Pass/Event/Ops)
+  - Actions 3-4: event side (Unshaded/Shaded)
+  - Actions 5-342: full ops actions (op×space)
+  - Action 343: enter Limited Ops (2nd actor only)
+  - Actions 344-681: limited ops actions (op×space; Special Activities masked out)
+  - Actions 682-694: target-space selection (used by certain events + ops)
+  - Actions 695-698: target-faction selection (used by certain events)
+- **Phase-dependent legal_actions**: mask changes based on `self.phase`
+- **Masking-first tests**: ops/unit tests assert actions are legal before calling `step()`
+- **Event side selection**: player explicitly chooses Unshaded vs Shaded (no more auto-guessing from faction)
+- **Blank event side handling**: cards 11/13/18 correctly mask out the empty shaded side
+ - **Tests**: all unit tests live under `tests/` and `python -m unittest discover -s tests -p "test_*.py"` passes.
+- **2018 campaign tracks**: Aid/US Alliance/Embargo + edge-track markers are explicit, clamped, and used in ops/events/Propaganda/victory with coverage and observation docs.
+
+### What still needs work
+1. **Propaganda procedure**
+   - ✅ Final-round exceptions implemented correctly (Support Phase only, no Redeploy/Reset)
+   - ✅ Casino reset timing correct (opens in Reset phase 6.5, skipped in final round)
+   - ✅ Capability cleanup implemented ("until Propaganda" capabilities cleared in Reset)
+   - ✅ Victory check timing correct (6.1 Victory Phase at start of Propaganda Round)
+   - Additional 1:1 verification and edge-case testing is still pending
+2. **Explicit target selection** - Analysis complete:
+   - ✅ Assault/Attack/Air Strike removal priorities are **correctly deterministic per rulebook** (Active→Underground→Bases is required, not a choice)
+   - Space selection is already agent-driven for most events/ops ✅
+   - Piece selection within spaces uses deterministic "first available" approach:
+     - Terror: Activates first Underground guerrilla (edge case: matters only with cash-holding pieces)
+     - Pact of Miami: Removes first available guerrilla in selected space (edge case: faction/type selection)
+   - Could add agent piece selection, but **impact is minimal** (only affects edge cases with multiple pieces of same faction in one space)
+3. ✅ **Op + Special Activity restrictions** - Fixed and verified!
+   - ✅ Fixed M26 Ambush: Removed incorrect terrain restriction (now works in any space)
+   - ✅ Fixed M26 Kidnap: Added M26>Police check and open casino requirement
+   - ✅ Fixed DR Assassinate: Removed terrain restriction, added DR>Police check
+   - ✅ Fixed SYN Bribe: Removed incorrect terrain restriction (now works in any space)
+   - ✅ Verified Govt Air Strike restrictions are correct (terrain + embargo checks)
+4. **Event cards (1–48)**: audited.
+
+### Event card accuracy audit (data.py vs code)
+Audit notes against `app/environments/cubalibre/envs/data.py` text (with explicit mismatches/caveats called out per card below).
+
+Format: `Un:` unshaded effect/capability; `Sh:` shaded effect/capability; `Tests:` file references.
+
+1. **Armored Cars (1)** — Un: choose 26July/DR; free March into chosen space (no Govt-presence restriction) from chosen adjacent source, then free Ambush there (even if Active). Sh: before Govt Assault, move Troops from any spaces into the Assault space via explicit pre-Assault reinforcement phase, then Assault resolves. Tests: `tests/cubalibre/test_cards_1_4.py`.
+2. **Guantánamo Bay (2)** — Un: 26July may Kidnap in Sierra Maestra as if City (capability). Sh: until Propaganda, Air Strike removes 2 and allowed even if Embargoed (capability). Tests: `tests/cubalibre/test_card_2_guantanamo_bay.py`.
+3. **Eulogio Cantillo (3)** — Un: free March "out" with normal multi-step choices (multiple destinations), moving 1 Guerrilla per destination pick until none remain, end on PASS. Tests: `tests/cubalibre/test_round3_events.py`, `tests/cubalibre/test_cantillo_unshaded_targeting.py`.
+4. **S.I.M. (4)** — Un: select Support space with no Police; shift 1 level toward Neutral (Active Support→Passive Support→Neutral). Sh: capability allows Police to participate in Govt Sweep/Assault as if Troops (until next Propaganda). Tests: `tests/cubalibre/test_sim_unshaded_target_selection.py`, `tests/cubalibre/test_cards_1_4.py`.
+5. **Rolando Masferrer (5)** — Un: set a Province with Troops and 1 adjacent Province to Passive Opposition. Sh: capability allows Sweep to free Assault 1 space as its Special Activity (until Propaganda). Tests: `tests/cubalibre/test_card_5_masferrer.py`.
+6. **Sánchez Mosquera (6)** — Un: select Mountain; remove all Troops there to available. Sh: capability makes Assault in Mountains unrestricted (treat Mountain as City) until next Propaganda. Tests: `tests/cubalibre/test_card_6_mosquera.py`.
+7. **Election (7)** — Un: choose any Guerrilla faction per City via explicit phase selection. Sh: select City; set to Neutral and Aid +10. Tests: `tests/cubalibre/test_card_7_election.py`.
+8. **General Strike (8)** — Un: choose any Guerrilla faction per City via explicit phase selection. Sh: select City; set to Active Support, activate all Guerrillas there, then open any 1 closed Casino anywhere. Tests: `tests/cubalibre/test_card_8_general_strike.py`.
+9. **Coup (9)** — Un: shift all Govt Control spaces 1 level toward Neutral; US Alliance up 1 box. Sh: activate + free Assault all DR pieces in Cities with cubes; US Alliance down 1 box. Tests: `tests/cubalibre/test_card_9_coup.py`.
+10. **MAP (10)** — Un: choose Guerrilla faction for each of 2 placed Guerrillas via explicit phase selection. Tests: `tests/cubalibre/test_card_10_map.py`.
+11. **Batista Flees (11)** — US Alliance shift direction correct ("up" 1 box = worsen 1 level); Govt Redeploy "as in Propaganda" implemented. Tests: `tests/cubalibre/test_card_11_batista_flees.py`.
+12. **BRAC (12)** — Un: remove any 2 Guerrillas (supports faction selection + Underground vs Active choice when relevant). Sh: place 1 Police anywhere; add lesser of +6 or Aid to Govt Resources. Tests: `tests/cubalibre/test_card_12_brac.py`.
+13. **El Che (13)** — Un: capability applied during M26 March (first moved guerrilla stays Underground). Tests: `tests/cubalibre/test_card_13_el_che.py`.
+14. **Operation Fisherman (14)** — Un: place 26July Base + Guerrilla in Pinar del Río. Sh: shift Pinar del Río 2 levels toward Active Support. Tests: `tests/cubalibre/test_card_14_operation_fisherman.py`.
+15. **Come Comrades! (15)** — Un: place 3 26July Guerrillas anywhere. Sh: Govt Resources + min(Aid, 10); then Aid +5. Tests: `tests/cubalibre/test_card_15_come_comrades.py`.
+16. **Larrazábal (16)** — Un: place 26July Base where there is a 26July piece. Sh: remove one 26July Base; 26July Resources -3. Tests: `tests/cubalibre/test_card_16_larrazabal.py`.
+17. **Alberto Bayo (17)** — Un: choose 26July/DR; chosen performs full free Rally in each space where it has a Base (incl flipping Active guerrillas). Sh: all 26July Guerrillas Active; 26July ineligible through next card. Tests: `tests/cubalibre/test_card_17_alberto_bayo.py`.
+18. **Pact of Caracas (18)** — Un: adds `PactOfCaracas_Unshaded` capability; blocks Insurgent opposition effects (Terror/Kidnap/Assassinate, including Mafia Offensive LimOp Terror) when M26/DR controlled by different players; cancels if either removes 2 of its Bases at once; executing faction stays eligible for next card. Note: current M26/DR Attack/Ambush implementations only remove Government pieces, so there is no cross-insurgent removal path to enforce. Tests: `tests/cubalibre/test_card_18_pact_of_caracas.py`.
+19. **Sierra Maestra Manifesto (19)** — Un: in card order, each faction may place 2 non-Casino pieces in a space where it already has a piece; supports placing bases/police via explicit option when multiple piece types available; executing faction stays eligible for next card. Tests: `tests/cubalibre/test_card_19_sierra_maestra_manifesto.py`.
+20. **The Twelve (20)** — Un: free March into chosen destination, then full free Rally at that destination. Sh: remove half (rounded up) of total Guerrillas from space with most Guerrillas. Tests: `tests/cubalibre/test_card_20_the_twelve.py`.
+21. **Fangio (21)** — Un: shift a City 1 level toward Active Opposition (2 if M26 piece present). Sh: in 2 casino spaces, open a closed Casino or place 1 Cash with a cube/guerrilla; cash owner choice masked to factions with a cube/guerrilla in space. Tests: `tests/cubalibre/test_card_21_fangio.py`.
+22. **Raúl (22)** — Un: capability allows M26 reroll failed Attack. Sh: capability doubles Aid gained from Kidnap resources. Tests: `tests/cubalibre/test_card_22_raul.py`.
+23. **Radio Rebelde (23)** — Un: shift 2 distinct Provinces 1 level toward Active Opposition. Sh: remove a 26July Base from a Province. Tests: `tests/cubalibre/test_card_23_radio_rebelde.py`.
+24. **Vilma Espín (24)** — Un: set Sierra Maestra or adjacent space to Active Opposition. Sh: remove all 26July pieces from a City other than Havana. Tests: `tests/cubalibre/test_card_24_vilma_espin.py`.
+25. **Escapade (25)** — Un: place DR Guerrilla + Base in Camagüey Province or Oriente. Sh: remove a Directorio Base. Tests: `tests/cubalibre/test_card_25_escapade.py`.
+26. **Rodríguez Loeches (26)** — Un: place 1 DR Guerrilla anywhere, then choose free March/Rally/Ambush there. Sh: remove 1 DR Guerrilla; DR Resources –5. Tests: `tests/cubalibre/test_card_26_rodriguez_loeches.py`.
+27. **Echeverría (27)** — Un: place 2 DR Guerrillas anywhere; Havana to Neutral; DR to Eligible. Sh: remove 2 closest DR pieces to Havana; DR Resources –3. Tests: `tests/cubalibre/test_card_27_echeverria.py`.
+28. **Morgan (28)** — Un: capability increases DR March range to 2 spaces. Sh: choose space with a DR Guerrilla; set to Active Support. Tests: `tests/cubalibre/test_card_28_morgan.py`.
+29. **Fauré Chomón (29)** — Un: DR or M26 chooses to place Base + 2 Guerrillas in Las Villas. Sh: in space with DR pieces, choose DR piece type, then choose Remove vs Replace (if replacement available). Tests: `tests/cubalibre/test_card_29_faure_chomon.py`.
+30. **The Guerrilla Life (30)** — Sh: flips all DR Guerrillas Underground; placement in City now requires available DR Guerrilla (masked if none). Tests: `tests/cubalibre/test_card_30_the_guerrilla_life.py`.
+31. **Escopeteros (31)** — Un: choose Mountain, then place any non-Casino Base (Govt/M26/DR if available) and any 1 Guerrilla. Sh: shift a Mountain space 1 level toward Support. Tests: `tests/cubalibre/test_round4_events.py`.
+32. **Resistencia Cívica (32)** — Un: in City, replace all DR pieces with M26 counterparts (subject to availability). Sh: in City, replace all M26 pieces with DR counterparts (subject to availability). Tests: `tests/cubalibre/test_round4_events.py`.
+33. **Carlos Prío (33)** — Un: +5 Resources to M26 or DR via explicit faction choice. Sh: placement requires available DR Base; targeting masked if none (prevents negative bases). Tests: `tests/cubalibre/test_round5_events.py`.
+34. **US Speaking Tour (34)** — Un: choose M26 or DR; chosen gains +die roll Resources; other gains +2. Tests: `tests/cubalibre/test_round5_events.py`, `tests/cubalibre/test_aid_and_alliance_events.py`.
+35. **Defections (35)** — Un: removals restricted to enemy Guerrillas/cubes only (no bases/casinos); Govt replacement allows Troop vs Police choice when both available. Tests: `tests/cubalibre/test_event_rules_updates.py`.
+36. **Eloy Gutiérrez Menoyo (36)** — Un: select space within 1 of Las Villas, replace a non-DR non-Casino piece with 2 DR Guerrillas. Sh: replace a DR Guerrilla with a non-DR Guerrilla. Tests: `tests/cubalibre/test_event_rules_updates.py`, `tests/cubalibre/test_round4_events.py`.
+37. **Herbert Matthews (37)** — Un: M26 +5 Resources; Aid -6. Sh: Aid +10; DR +3 Resources; Syndicate +5 Resources. Tests: `tests/cubalibre/test_aid_and_alliance_events.py`.
+38. **Meyer Lansky (38)** — Un: agent-driven cash transfers are holder-to-holder within chosen space (any Guerrillas/cubes), preserving cash ownership. Sh: opens all closed Casinos; supports repeated agent-driven Casino relocation subject to `_can_place_casino`. Tests: `tests/cubalibre/test_meyer_lansky_unshaded_cash_holder_transfers.py`, `tests/cubalibre/test_meyer_lansky_shaded_casino_relocation.py` (includes casino stacking/placement masking per 1.4.2).
+39. **Turismo (39)** — Un: includes closed Casinos as "Casino spaces" for shifting toward Neutral. Sh: Govt and Syndicate each +3 Resources per space with open Casino and Police. Tests: `tests/cubalibre/test_turismo_shaded_resources.py`.
+40. **Ambassador Smith (40)** — Un: US Alliance worsens 1 box; Aid unchanged. Sh: US Alliance improves 1 box; Aid +9; Syndicate gains min(9, half Aid). Tests: `tests/cubalibre/test_ambassador_smith_event.py`.
+41. **Fat Butcher (41)** — Un: explicit option selection (Close 1 Casino vs Aid -8). Sh: Syndicate free Ambush then open 1 closed Casino (agent chooses targets). Tests: `tests/cubalibre/test_fat_butcher_agent_choices.py`, `tests/cubalibre/test_fat_butcher_unshaded_target_selection.py`, `tests/cubalibre/test_fat_butcher_unshaded_choose_aid_option.py`, `tests/cubalibre/test_fat_butcher_shaded_open_choice_target_selection.py`.
+42. **Llano (42)** — Un: places 26July Base then supports choosing any Guerrilla faction via explicit phase selection. Tests: `tests/cubalibre/test_llano_unshaded_target_selection.py`.
+43. **Mafia Offensive (43)** — Un: free LimOp March enforces at most 1 Syndicate guerrilla total may be treated as the acting faction’s piece during the LimOp. Sh: Hitmen capability lets Syndicate Assassinate as if DR regardless of Police. Tests: `tests/cubalibre/test_mafia_offensive_unshaded_proxy_ops.py`, `tests/cubalibre/test_hitmen_shaded_capability.py`.
+44. **Rebel Air Force (44)** — Un: choose 26July vs DR; choose space where that faction has any Guerrilla and Govt has pieces; free Ambush removes Bases first. Sh: choose 26July vs DR; transfer 1 die roll of chosen faction's Resources to Syndicate. Tests: `tests/cubalibre/test_card_44_rebel_air_force.py`.
+45. **Anastasia (45)** — Un: close all Casinos in Havana; Syndicate Resources -5. Sh: Syndicate Resources +10. Tests: `tests/cubalibre/test_card_45_anastasia.py`.
+46. **Sinatra (46)** — Sh: place open Casino in Havana regardless of stacking; place 1 Syndicate-owned Cash marker held by Police in Havana (requires Police). Tests: `tests/cubalibre/test_sinatra_event.py`.
+47. **Pact of Miami (47)** — Un: agent-driven 3-step guerrilla removal across factions; Govt ineligible through next card applied. Sh: M26/DR -3 Resources and ineligible through next card implemented. Tests: `tests/cubalibre/test_pact_of_miami_unshaded_removal_flow.py`.
+48. **Santo Trafficante, Jr (48)** — Un: Syndicate Resources –10; all Syndicate Guerrillas Active. Sh: adds `Trafficante_Shaded` capability (Underground Syndicate block Skim). Tests: `tests/cubalibre/test_card_48_santo_trafficante_jr.py`.
+
+## 11) Notes / known issues discovered already
+
+- Propaganda victory logic is implemented and tested, but full 1:1 verification against 2018 rulebook edge-cases is still pending (especially Govt victory conditions).
+
+## 12) References
+
+- Original (authoritative for this codebase) event text source:
+  - https://github.com/bndlfm/SIMPLE-CubaLibre/blob/main/app/environments/cuba_libre/cuba_libre/envs/classes.py
+
+- Acceptance target for 1:1 implementation:
+  - `RULES_SPEC.md`
+
+## 13) Future Enhancements (Post-UI)
+
+### Agent Piece Selection Within Spaces
+Current behavior: when multiple pieces of the same faction exist in one space, selection is deterministic ("first available"):
+- Terror: activates first Underground guerrilla.
+- Pact of Miami: removes first available guerrilla.
+- Other operations: similar deterministic priorities.
+
+Enhancement: add UI-driven piece selection so agents can choose which specific piece to affect when multiple eligible pieces exist.
+
+Requirements: UI layer to display/select individual pieces; new phase for piece selection with masking; adds strategic depth for cash management and faction-specific targeting.
+
+Priority: Low (edge case; current behavior is acceptable and follows rulebook where specified).
