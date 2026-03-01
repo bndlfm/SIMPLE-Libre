@@ -1,5 +1,7 @@
 import os
 import logging
+import json
+import time
 import numpy as np
 from shutil import copyfile
 
@@ -29,7 +31,28 @@ class SelfPlayCallback(MaskableEvalCallback):
       self.threshold = threshold # the threshold is a constant
 
 
+
+
+  def _log_to_jsonl(self, metrics: dict):
+    try:
+      log_path = os.path.join(config.LOGDIR, "training.jsonl")
+      with open(log_path, "a") as f:
+        f.write(json.dumps(metrics) + "\n")
+    except Exception as e:
+      logger.error(f"Failed to log to JSONL: {e}")
+
   def _on_step(self) -> bool:
+    
+    # Log intermediate training progress every 1000 steps
+    if self.n_calls % 1000 == 0:
+      metrics = {
+        "timestamp": time.time(),
+        "timesteps": self.num_timesteps,
+        "generation": self.generation,
+        "best_mean_reward": float(self.threshold),
+        "status": "training" 
+      }
+      self._log_to_jsonl(metrics)
 
     if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
 
@@ -41,9 +64,24 @@ class SelfPlayCallback(MaskableEvalCallback):
 
       if self.callback is not None:
         av_rules_based_reward = self.callback.best_mean_reward
+      else:
+        av_rules_based_reward = 0.0
 
       logger.info("Eval num_timesteps={}, episode_reward={:.2f} +/- {:.2f}".format(self.num_timesteps, av_reward, std_reward))
       logger.info("Total episodes ran={}".format(total_episodes))
+
+      # Log to JSONL for WebUI
+      metrics = {
+        "timestamp": time.time(),
+        "timesteps": self.num_timesteps,
+        "generation": self.generation,
+        "best_mean_reward": float(self.threshold),
+        "eval_mean_reward": float(av_reward),
+        "eval_std_reward": float(std_reward),
+        "rules_based_reward": float(av_rules_based_reward),
+        "status": "eval"
+      }
+      self._log_to_jsonl(metrics)
 
       #compare the latest reward against the threshold
       if result and av_reward > self.threshold:

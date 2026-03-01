@@ -1,4 +1,4 @@
-const DEFAULT_BASE_URL = 'http://localhost:8000'
+const DEFAULT_BASE_URL = 'http://localhost:8001'
 
 export function getBaseUrl() {
   const saved = window.localStorage.getItem('simple_webui_base_url')

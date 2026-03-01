@@ -1,8 +1,10 @@
 gymnasium
-stable-baselines3[extra]
+stable-baselines3
+opencv-python-headless
 sb3-contrib
 shimmy
 numpy
 jupyter==1.0.0
 jupyterlab==3.0.0
 pillow
+uvicorn[standard]

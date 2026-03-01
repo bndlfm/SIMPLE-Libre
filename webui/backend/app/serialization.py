@@ -70,6 +70,7 @@ def serialize_env(env, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, A
                 "id": int(p.id),
                 "name": str(p.name),
                 "resources": int(p.resources),
+                "points": int(getattr(p, "points", 0)),
                 "eligible": bool(p.eligible),
                 "available_forces": [int(x) for x in getattr(p, "available_forces", [])],
                 "available_bases": int(getattr(p, "available_bases", 0)),

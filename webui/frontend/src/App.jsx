@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet, apiPost, getBaseUrl, setBaseUrl } from './api.js'
 import { SPACE_HITBOXES } from './mapLayout.js'
+import ModelSelector from './ModelSelector'
 
 function factionNameFromId(id) {
   if (id === 0) return 'GOVT'
@@ -147,7 +148,12 @@ function ControlsPanel({ state, onStep }) {
     )
   }
 
-  // Fallback for other phases (Ops, Limited Ops) - still allow raw input for debugging
+  // PHASE 2, 3, 4: OPS / LIMOPS / SPECIAL ACTIVITY
+  if (phase === 2 || phase === 3 || phase === 4) {
+    return <OpsPanel state={state} onStep={onStep} />
+  }
+
+  // Fallback for other phases - still allow raw input for debugging
   return (
     <div className="col">
       <div className="small">Raw Action Input (Phase {phaseName(phase)})</div>
@@ -163,6 +169,109 @@ function ControlsPanel({ state, onStep }) {
   )
 }
 
+const OPS = {
+  // GOVT
+  0: "Train Force", 1: "Train Base", 2: "Garrison", 3: "Sweep",
+  4: "Assault", 5: "Transport", 6: "Air Strike",
+  // M26
+  7: "Rally", 8: "March", 9: "Attack", 10: "Terror",
+  15: "Ambush", 16: "Kidnap",
+  // DR
+  11: "Rally", 12: "March", 13: "Attack", 14: "Terror",
+  17: "Assassinate",
+  // Syndicate
+  18: "Rally", 19: "March", 20: "Attack", 21: "Terror",
+  22: "Bribe", 23: "Construct",
+  // Shared
+  24: "Event", 25: "Pass"
+}
+
+function OpsPanel({ state, onStep }) {
+  const [selectedOp, setSelectedOp] = useState(null)
+
+  const { phase, legal_actions, action_ranges, spaces } = state
+  const legalSet = new Set(legal_actions.ones)
+
+  // Determine base offset
+  let base = 0
+  let count = 0
+  if (phase === 3) {
+    // Limited Ops
+    base = action_ranges.limited_ops.base
+    count = action_ranges.limited_ops.count
+  } else {
+    // Ops (2) or Special Activity (4) - both use main Ops range
+    base = action_ranges.ops.base
+    count = action_ranges.ops.count
+  }
+
+  // Parse valid Ops and Spaces
+  const validOps = useMemo(() => {
+    const map = new Map() // opId -> [spaceIds]
+
+    legal_actions.ones.forEach(id => {
+      if (id >= base && id < base + count) {
+        const rel = id - base
+        const opId = Math.floor(rel / 13)
+        const spaceId = rel % 13
+
+        if (!map.has(opId)) map.set(opId, [])
+        map.get(opId).push(spaceId)
+      }
+    })
+    return map
+  }, [legal_actions, base, count])
+
+  // If selected OP is no longer valid (e.g. after update), clear it
+  if (selectedOp !== null && !validOps.has(selectedOp)) {
+    // We can't set state during render, but we can treat it as null
+    // Effect will handle cleanup if needed, but for render just show op list
+  }
+
+  const opIds = Array.from(validOps.keys()).sort((a, b) => a - b)
+
+  if (selectedOp === null || !validOps.has(selectedOp)) {
+    return (
+      <div className="col">
+        <div className="small">Select Operation:</div>
+        <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>
+          {opIds.map(opId => (
+            <button key={opId} onClick={() => setSelectedOp(opId)}>
+              {OPS[opId] || `Op ${opId}`}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const spaceIds = validOps.get(selectedOp).sort((a, b) => a - b)
+  const opName = OPS[selectedOp] || `Op ${selectedOp}`
+
+  return (
+    <div className="col">
+      <div className="row">
+        <button className="secondary" onClick={() => setSelectedOp(null)}>← Back</button>
+        <div className="small" style={{ alignSelf: 'center', marginLeft: 10 }}>
+          Target for <b>{opName}</b>:
+        </div>
+      </div>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+        {spaceIds.map(sId => {
+          const sp = spaces.find(s => s.id === sId)
+          const name = sp ? sp.name : `Space ${sId}`
+          const actId = base + (selectedOp * 13) + sId
+          return (
+            <button key={sId} onClick={() => onStep(actId)}>
+              {name}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [baseUrl, setBaseUrlState] = useState(getBaseUrl())
   const [state, setState] = useState(null)
@@ -171,9 +280,12 @@ export default function App() {
   const wsRef = useRef(null)
   // Faction roles: local UI state, synced with server
   const [factionRoles, setFactionRoles] = useState({ 0: 'human', 1: 'ai', 2: 'ai', 3: 'ai' })
+  // Scenario
+  const [scenario, setScenario] = useState('standard')
   // Model
-  const [modelPath, setModelPath] = useState('zoo/cubalibre/best_model.zip')
-  const [modelDevice, setModelDevice] = useState('')
+  // Model
+  // const [modelPath, setModelPath] = useState('zoo/cubalibre/best_model.zip')
+  // const [modelDevice, setModelDevice] = useState('')
   // Spectator
   const [spectatorTickMs, setSpectatorTickMs] = useState(500)
   // Training watch
@@ -217,29 +329,7 @@ export default function App() {
 
   // ---- API actions ----
 
-  async function loadModel() {
-    setError(null)
-    try {
-      await apiPost('/model/load', {
-        path: modelPath,
-        device: modelDevice || undefined,
-        algo: 'PPO'
-      })
-      await refresh()
-    } catch (e) {
-      setError(String(e?.message || e))
-    }
-  }
 
-  async function unloadModel() {
-    setError(null)
-    try {
-      await apiPost('/model/unload')
-      await refresh()
-    } catch (e) {
-      setError(String(e?.message || e))
-    }
-  }
 
   async function applyFactionRoles() {
     setError(null)
@@ -308,7 +398,10 @@ export default function App() {
   async function reset() {
     setError(null)
     try {
-      const s = await apiPost('/reset', { faction_roles: factionRolesPayload() })
+      const s = await apiPost('/reset', {
+        faction_roles: factionRolesPayload(),
+        scenario: scenario
+      })
       setState(s)
     } catch (e) {
       setError(String(e?.message || e))
@@ -375,8 +468,58 @@ export default function App() {
   // Determine if it's currently a human player's turn
   const isHumanTurn = state ? factionRoles[state.current_player] === 'human' : false
 
+  // Determine winner if done
+  let winnerText = ""
+  if (state && state.done) {
+    const sorted = [...state.players].sort((a, b) => b.points - a.points)
+    const winner = sorted[0]
+    winnerText = `${winner.name} wins!`
+    if (sorted[0].points === sorted[1].points) winnerText = "Draw!"
+  }
+
   return (
     <div className="container">
+      {state && state.done && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{ backgroundColor: '#222', padding: 40, borderRadius: 8, textAlign: 'center', border: '1px solid #444', maxWidth: 600, width: '100%' }}>
+            <h1 style={{ color: '#fff', marginBottom: 10 }}>GAME OVER</h1>
+            <h2 style={{ color: '#4CAF50', marginBottom: 30 }}>{winnerText}</h2>
+
+            <table style={{ margin: '0 auto 30px auto', borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #555' }}>
+                  <th style={{ padding: 10, textAlign: 'left' }}>Faction</th>
+                  <th style={{ padding: 10, textAlign: 'right' }}>Score</th>
+                  <th style={{ padding: 10, textAlign: 'right' }}>Resources</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...state.players].sort((a, b) => b.points - a.points).map(p => (
+                  <tr key={p.id}>
+                    <td style={{ padding: 8, textAlign: 'left' }}>{p.name}</td>
+                    <td style={{ padding: 8, textAlign: 'right', fontWeight: 'bold', fontSize: '1.2em' }}>{p.points}</td>
+                    <td style={{ padding: 8, textAlign: 'right' }}>{p.resources}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <button
+              onClick={() => {
+                reset()
+                // Also close modal locally if needed, but reset should clear state.done
+              }}
+              style={{ fontSize: 18, padding: '12px 24px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            >
+              Play Again
+            </button>
+          </div>
+        </div>
+      )}
       <div className="panel">
         <h2>Connection</h2>
         <div className="row">
@@ -417,12 +560,23 @@ export default function App() {
           </div>
           <div className="row" style={{ marginTop: 6 }}>
             <button onClick={applyFactionRoles}>Apply Roles</button>
-            <button onClick={reset}>New Game</button>
+            <div className="row" style={{ marginLeft: 10, background: '#333', padding: '2px 8px', borderRadius: 4 }}>
+              <label style={{ marginRight: 6, fontSize: '0.8em' }}>Scenario:</label>
+              <select
+                value={scenario}
+                onChange={(e) => setScenario(e.target.value)}
+                style={{ background: '#222', color: '#fff', border: '1px solid #555', fontSize: '0.8em' }}
+              >
+                <option value="standard">Standard Campaign</option>
+                <option value="short">Short Game (8 fewer events)</option>
+              </select>
+            </div>
+            <button onClick={reset} style={{ marginLeft: 10 }}>New Game</button>
             <button onClick={refresh}>Refresh</button>
           </div>
           {Object.keys(serverRoles).length > 0 && (
             <div className="small" style={{ marginTop: 4 }}>
-              Server: {[0,1,2,3].map((i) => `${factionNameFromId(i)}=${serverRoles[String(i)] || '?'}`).join(' | ')}
+              Server: {[0, 1, 2, 3].map((i) => `${factionNameFromId(i)}=${serverRoles[String(i)] || '?'}`).join(' | ')}
             </div>
           )}
         </div>
@@ -437,29 +591,7 @@ export default function App() {
         ) : null}
 
         <h2 style={{ marginTop: 16 }}>Model</h2>
-        <div className="col">
-          <div className="small">Loaded: {String(modelInfo.loaded)} | Algo: {modelInfo.algo || '\u2014'}</div>
-          <div className="row" style={{ marginTop: 6 }}>
-            <input
-              value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
-              placeholder="zoo/cubalibre/best_model.zip"
-              style={{ width: 220 }}
-            />
-            <input
-              value={modelDevice}
-              onChange={(e) => setModelDevice(e.target.value)}
-              placeholder="cpu"
-              style={{ width: 60 }}
-            />
-            <button onClick={loadModel}>Load</button>
-            <button onClick={unloadModel}>Unload</button>
-          </div>
-          <div className="small" style={{ marginTop: 4 }}>
-            {modelInfo.loaded ? `Model: ${modelInfo.path}` : 'No model (AI uses random legal actions)'}
-          </div>
-          {modelInfo.error ? <div className="small" style={{ color: '#e44' }}>Error: {modelInfo.error}</div> : null}
-        </div>
+        <ModelSelector modelInfo={modelInfo} onReload={refresh} />
 
         <h2 style={{ marginTop: 16 }}>Spectator (AI vs AI)</h2>
         <div className="col">

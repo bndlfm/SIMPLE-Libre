@@ -17,12 +17,12 @@ class EnvInstance:
             raise RuntimeError("Environment not initialized. Call /reset first.")
         return self._env
 
-    def reset(self):
+    def reset(self, options: Optional[dict] = None):
         # Import lazily so backend can start even if some heavy deps aren't installed.
         from app.environments.cubalibre.envs.env import CubaLibreEnv
 
         self._env = CubaLibreEnv(verbose=False, manual=True, same_player_control=True)
-        self._env.reset()
+        self._env.reset(options=options)
         return self._env
 
 

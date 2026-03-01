@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 import os
+import uuid
+import time
 import numpy as np
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -24,17 +26,31 @@ app = FastAPI(title="SIMPLE WebUI Backend", version="0.1.0")
 _WEBUI_DIR = Path(__file__).resolve().parents[2]
 _IMAGES_DIR = _WEBUI_DIR / "images"
 app.mount("/assets", StaticFiles(directory=str(_IMAGES_DIR)), name="assets")
+_LOG_DIR = _WEBUI_DIR.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:8001",
+        "http://127.0.0.1:8001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    # Auto-initialize environment on startup to prevent 500s on frontend load
+    print("Auto-initializing environment...")
+    try:
+        env_instance.reset()
+        print("Environment initialized.")
+    except Exception as e:
+        print(f"Failed to auto-initialize environment: {e}")
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
@@ -60,6 +76,7 @@ class ModelLoadRequest(BaseModel):
 
 class ResetRequest(BaseModel):
     faction_roles: Optional[Dict[str, str]] = None  # {"0":"human","1":"ai",...}
+    scenario: Optional[str] = "standard"
 
 
 class FactionRolesRequest(BaseModel):
@@ -91,6 +108,8 @@ model_manager = ModelManager()
 
 _last_action: Optional[int] = None
 _last_actor: Optional[int] = None
+_game_id: str = str(uuid.uuid4())
+_game_step_count: int = 0
 
 # Spectator (AI-vs-AI demo) state
 _spectator_task: Optional[asyncio.Task] = None
@@ -113,6 +132,30 @@ _training_watch_task: Optional[asyncio.Task] = None
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _log_game_step(
+    actor: int, action: int, reward: Any, done: bool, info: Any, type: str = "unknown"
+) -> None:
+    global _game_step_count
+    _game_step_count += 1
+    
+    entry = {
+        "timestamp": time.time(),
+        "game_id": _game_id,
+        "step": _game_step_count,
+        "actor": actor,
+        "action": int(action),
+        "reward": reward,
+        "done": done,
+        "type": type,
+        # We could add state summary here if needed
+    }
+    try:
+        with open(_LOG_DIR / "game_history.jsonl", "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"Failed to log game step: {e}")
 
 
 def _set_faction_roles(roles: Optional[Dict[str, str]]) -> None:
@@ -178,8 +221,20 @@ async def _ai_step(env, deterministic: bool = False) -> tuple:
         if action is None:
             raise RuntimeError("No legal actions available for AI step.")
         info = {"random": True}
+    
     obs, reward, terminated, truncated, _info = env.step(int(action))
     _set_last_action(int(action), actor)
+    
+    # Log AI step
+    _log_game_step(
+        actor=actor,
+        action=int(action),
+        reward=reward,
+        done=terminated or truncated,
+        info=info,
+        type="ai"
+    )
+
     return action, actor, info, reward, terminated, truncated
 
 
@@ -300,6 +355,11 @@ async def _spectator_loop() -> None:
             if done:
                 if _spectator_auto_reset:
                     env = env_instance.reset()
+                    # Assign new game ID for spectator reset
+                    global _game_id, _game_step_count
+                    _game_id = str(uuid.uuid4())
+                    _game_step_count = 0
+                    
                     state = serialize_env(env, metadata=_state_metadata({"spectator_event": "reset"}))
                     await _broadcast_state(state)
                     await asyncio.sleep(_spectator_tick_ms / 1000.0)
@@ -398,10 +458,16 @@ async def reset_env(req: Optional[ResetRequest] = None) -> Dict[str, Any]:
     if req and req.faction_roles:
         _set_faction_roles(req.faction_roles)
 
-    env = env_instance.reset()
+    # Initialize new game ID
+    global _game_id, _game_step_count
+    _game_id = str(uuid.uuid4())
+    _game_step_count = 0
+
+    env = env_instance.reset(options={"scenario": req.scenario} if req and req.scenario else None)
     _set_last_action(None, None)
     state = serialize_env(env, metadata=_state_metadata())
     await _broadcast_state(state)
+
 
     # If the first turn is AI, auto-advance
     if not _is_human_turn():
@@ -449,6 +515,17 @@ async def step(req: StepRequest) -> StepResponse:
     actor = env.current_player_num
     obs, reward, terminated, truncated, _info = env.step(int(req.action))
     _set_last_action(int(req.action), actor)
+
+    # Log Human step
+    _log_game_step(
+        actor=actor,
+        action=int(req.action),
+        reward=reward,
+        done=terminated or getattr(env, "done", False),
+        info=_info,
+        type="human"
+    )
+
     state = serialize_env(env, metadata=_state_metadata())
     await _broadcast_state(state)
 
@@ -467,6 +544,36 @@ async def step(req: StepRequest) -> StepResponse:
 # ---------------------------------------------------------------------------
 # Model management
 # ---------------------------------------------------------------------------
+
+@app.get("/models")
+@app.get("/models/")
+def list_models() -> List[Dict[str, str]]:
+    """List available models in zoo and logs."""
+    models = []
+    
+    # 1. Zoo
+    zoo_dir = _WEBUI_DIR.parent / "zoo" / "cubalibre"
+    if zoo_dir.exists():
+        for f in zoo_dir.glob("*.zip"):
+            models.append({
+                "name": f.name,
+                "path": str(f.absolute()),
+                "source": "zoo"
+            })
+
+    # 2. Checkpoints
+    logs_dir = _WEBUI_DIR.parent / "logs" / "checkpoints"
+    if logs_dir.exists():
+        for f in logs_dir.glob("*.zip"):
+            models.append({
+                "name": f.name,
+                "path": str(f.absolute()),
+                "source": "checkpoint"
+            })
+            
+    # Sort by name
+    models.sort(key=lambda x: x["name"])
+    return models
 
 
 @app.post("/model/load")

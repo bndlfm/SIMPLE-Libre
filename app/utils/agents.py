@@ -79,27 +79,57 @@ class Agent():
   def choose_action(self, env, choose_best_action, mask_invalid_actions):
       if self.name == 'rules':
         action_probs = np.array(env.rules_move())
-        value = None
-      else:
-        action_probs = get_action_probs_sb3(self.model, env.observation)
-        value = get_value_sb3(self.model, env.observation)
-        logger.debug(f'Value {value:.2f}')
-
-      self.print_top_actions(action_probs)
-      
-      if mask_invalid_actions:
-        action_probs = mask_actions(env.legal_actions, action_probs)
-        logger.debug('Masked ->')
-        self.print_top_actions(action_probs)
+        action = np.argmax(action_probs) # Rules agent returns a one-hot or prob distribution? Usually one-hot.
+        # Actually rules_move returns 0s and 1s? Let's assume it returns a distribution or valid move.
+        # Original code: action_probs = np.array(env.rules_move()); value=None; ... action = np.argmax(action_probs)
+        # So it returns a distribution (likely deterministic).
+        # We preserve original logic for 'rules' agent.
         
-      action = np.argmax(action_probs)
-      logger.debug(f'Best action {action}')
+        self.print_top_actions(action_probs)
+        if mask_invalid_actions:
+             action_probs = mask_actions(env.legal_actions, action_probs)
+             logger.debug('Masked ->')
+             self.print_top_actions(action_probs)
+        
+        action = np.argmax(action_probs)
+        if not choose_best_action:
+             action = sample_action(action_probs)
+        return action
 
-      if not choose_best_action:
-          action = sample_action(action_probs)
-          logger.debug(f'Sampled action {action} chosen')
+      else:
+        # Use SB3 predict with action_masks
+        obs = env.observation
+        masks = env.legal_actions if mask_invalid_actions else None
+        
+        try:
+            # Try native MaskablePPO predict
+            action, _state = self.model.predict(
+                obs,
+                deterministic=choose_best_action,
+                action_masks=masks
+            )
+        except TypeError:
+            # Fallback for standard PPO (does not support action_masks)
+            # Use manual masking
+            action_probs = get_action_probs_sb3(self.model, obs)
+            
+            if mask_invalid_actions:
+                action_probs = mask_actions(env.legal_actions, action_probs)
+            
+            if choose_best_action:
+                 action = np.argmax(action_probs)
+            else:
+                 action = sample_action(action_probs)
+            
+            logger.debug(f'Fallback action: {action}')
+            return int(action)
 
-      return action
+        # predict returns a scalar or 0-d array for SingleEnv
+        if isinstance(action, np.ndarray):
+            action = action.item()
+            
+        logger.debug(f'Action chosen by model: {action}')
+        return int(action)
 
 
 

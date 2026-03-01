@@ -1218,6 +1218,13 @@ class CubaLibreEnv(gym.Env):
         if final_round:
             self.final_victory_margins_result = self.victory_margins()
             self.final_victory_ranking_result = self.final_victory_ranking()
+            winner_idx = self.final_victory_ranking_result[0]
+            margins = self.final_victory_margins_result
+            print(f"\n{'='*40}")
+            print(f"  FINAL PROPAGANDA — {self.factions_list[winner_idx]} WINS!")
+            print(f"  Margins: GOVT={margins[0]:+d}  M26={margins[1]:+d}  DR={margins[2]:+d}  SYN={margins[3]:+d}")
+            print(f"  Ranking: {[self.factions_list[f] for f in self.final_victory_ranking_result]}")
+            print(f"{'='*40}")
             return False
 
         # 6.4 Redeploy Phase (partial)
@@ -1294,6 +1301,7 @@ class CubaLibreEnv(gym.Env):
                 self._last_op_space = None
                 self._sa_restrict_op = None
                 self._sa_restrict_space = None
+                self.rounds_taken = getattr(self, 'rounds_taken', 0) + 1
                 print(f"\n>>> NEW CARD: {card.name} (Order: {[self.factions_list[i] for i in card.faction_order]})")
                 return True
 
@@ -1950,9 +1958,13 @@ class CubaLibreEnv(gym.Env):
                     src_holder = pending_target.get("src_holder")
                     if src_holder is None:
                         return mask
+                    has_any_dest = False
                     for idx in range(len(sp.pieces)):
                         if int(sp.pieces[idx]) > 0 and int(idx) != int(src_holder):
                             target_mask[idx] = 1
+                            has_any_dest = True
+                    # Always allow stop as fallback (handles edge case of no valid destinations)
+                    target_mask[self._target_piece_action_count - 1] = 1
 
                 mask[self._target_piece_action_base:self._target_piece_action_base + self._target_piece_action_count] = target_mask
                 return mask
@@ -2206,12 +2218,87 @@ class CubaLibreEnv(gym.Env):
         return mask
 
     def action_masks(self):
-        """Return boolean mask for MaskablePPO. True = action is valid."""
-        return np.array(self.legal_actions, dtype=bool)
+        """Return boolean mask for MaskablePPO. True = action is valid.
+
+        Per COIN rules, ineligible factions are skipped entirely (no action,
+        no resource gain).  If we detect an all-zeros mask caused by an
+        ineligible player sitting at PHASE_CHOOSE_MAIN, we auto-advance the
+        turn pointer until we reach an eligible player or a new card, then
+        return that player's mask.
+
+        Additionally, events can "fizzle" — transitioning to a target
+        selection phase where no valid targets exist.  In that case we clean
+        up the pending event state and advance the turn.
+        """
+        la = np.array(self.legal_actions, dtype=bool)
+        # Auto-skip ineligible players (guards against infinite loops)
+        safety = 0
+        while not la.any() and safety < 20:
+            if self.deck_empty:
+                # Game Over triggered during auto-advance. Return dummy mask to allow step() call.
+                la[0] = 1
+                break
+            safety += 1
+            player = self.players[self.current_player_num]
+            if self.phase == PHASE_CHOOSE_MAIN and not player.eligible:
+                print(f"  (auto-skip ineligible {player.name})")
+                self.card_action_slot += 1
+                self.update_turn_pointer()
+                la = np.array(self.legal_actions, dtype=bool)
+            elif self.phase in (PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION,
+                                PHASE_CHOOSE_EVENT_OPTION, PHASE_CHOOSE_TARGET_PIECE,
+                                PHASE_CHOOSE_OP_ACTION, PHASE_CHOOSE_LIMITED_OP_ACTION,
+                                PHASE_CHOOSE_SPECIAL_ACTIVITY):
+                # Event / multi-step action fizzled — no valid targets.
+                pending = self._pending_event_target
+                pending_f = getattr(self, '_pending_event_faction', None)
+                pending_o = getattr(self, '_pending_event_option', None)
+                pending_op = self._pending_op_target
+                fizzle_label = (
+                    (pending.get("event") if pending else None) or
+                    (pending_f.get("event") if pending_f else None) or
+                    (pending_o.get("event") if pending_o else None) or
+                    (pending_op.get("op") if pending_op else None) or
+                    f"phase-{self.phase}"
+                )
+                print(f"  (event fizzle: {fizzle_label} — no valid targets for {player.name})")
+                # Clean up all pending state
+                self._pending_event_target = None
+                self._pending_event_faction = None
+                self._pending_event_option = None
+                self._pending_op_target = None
+                self._pending_main = None
+                # Mark player ineligible and advance
+                player.eligible = False
+                if not self.keep_eligible_this_action:
+                    self.ineligible_next_card.add(self.current_player_num)
+                self.card_action_slot += 1
+                self.phase = PHASE_CHOOSE_MAIN
+                self.update_turn_pointer()
+                la = np.array(self.legal_actions, dtype=bool)
+            else:
+                # Genuine all-zeros mask in a non-skip scenario — log for debugging
+                pending = getattr(self, '_pending_event_target', None)
+                print(f"WARNING: All-zeros mask! phase={self.phase}, player={player.name}, "
+                      f"eligible={player.eligible}, pending_event={pending}")
+                break
+        return la
 
     def step(self, action):
+        if self.deck_empty:
+             return self.observation, 0.0, True, False, {"rewards": [0.0] * self.n_players}
         reward = [0.0] * self.n_players; done = False
         player = self.players[self.current_player_num]
+
+        # Auto-skip ineligible players (COIN rules: they are simply skipped,
+        # no action taken, no resources gained).  This catches both MaskablePPO
+        # and selfplay opponents, which use different mask paths.
+        if self.phase == PHASE_CHOOSE_MAIN and not player.eligible:
+            print(f"  (auto-skip ineligible {player.name} in step())")
+            self.card_action_slot += 1
+            self.update_turn_pointer()
+            return self.observation, 0.0, self.deck_empty, False, {"rewards": reward}
+
         advance_turn = True
         self.keep_eligible_this_action = False
         if self._cash_transfer_waiting and not self._cash_transfer_active and self.phase == PHASE_CHOOSE_MAIN:
@@ -2623,9 +2710,22 @@ class CubaLibreEnv(gym.Env):
                 elif card_id == 38:
                     if not play_shaded:
                         # Meyer Lansky (Un): Within a space, transfer any Cash among any Guerrillas or cubes.
-                        self._pending_event_target = {"event": "MEYER_LANSKY_UN", "stage": "SPACE"}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
+                        has_valid_space = any(
+                            self._space_total_cash(sp) > 0 and self._space_has_valid_cash_transfer_between_holders(sp)
+                            for sp in self.board.spaces
+                        )
+                        if has_valid_space:
+                            self._pending_event_target = {"event": "MEYER_LANSKY_UN", "stage": "SPACE"}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                        else:
+                            print(" -> Meyer Lansky (Un): No space has cash to transfer — event fizzles.")
+                            player.eligible = False
+                            if not self.keep_eligible_this_action:
+                                self.ineligible_next_card.add(self.current_player_num)
+                            self.card_action_slot += 1
+                            self.phase = PHASE_CHOOSE_MAIN
+                            self._pending_main = None
                     else:
                         # Meyer Lansky (Sh): Syndicate relocates any Casinos anywhere. All Casinos open.
                         for sp in self.board.spaces:
@@ -2741,6 +2841,7 @@ class CubaLibreEnv(gym.Env):
                         advance_turn = False
                         cost = 0
                     elif op == OP_SWEEP:
+                        self._clear_pending()
                         allow_police = "SIM_Shaded" in self.capabilities
                         self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
@@ -2748,14 +2849,20 @@ class CubaLibreEnv(gym.Env):
                         cost = 0
                     elif op == OP_ASSAULT:
                         if "ArmoredCars_Shaded" in self.capabilities:
+                            self._clear_pending()
                             self._pending_op_target = {"op": "ASSAULT_REINFORCE_SRC", "dest": s, "limited": False, "context": "OP"}
                             self.phase = PHASE_CHOOSE_TARGET_SPACE
                             advance_turn = False
                             cost = 0
                         else:
-                            cost = self._op_assault_impl(s)
+                            cost = self._op_assault_impl(s, context="OP")
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                     elif op == OP_TRANSPORT:
                         # Agent selects a source space for Transport.
+                        self._clear_pending()
                         self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
@@ -2764,11 +2871,17 @@ class CubaLibreEnv(gym.Env):
                 elif player.name == "M26":
                     if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
                     elif op == OP_MARCH_M26:
+                        self._clear_pending()
                         self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_M26: cost = self._op_attack_insurgent(s, 2, 3, 4)
+                    elif op == OP_ATTACK_M26:
+                        cost = self._op_attack_insurgent(s, 2, 3, 4)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
                     elif op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
                     elif op == OP_KIDNAP_M26: cost = self.op_kidnap_m26(s)
@@ -2780,7 +2893,12 @@ class CubaLibreEnv(gym.Env):
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_DR: cost = self._op_attack_insurgent(s, 5, 6, 7)
+                    elif op == OP_ATTACK_DR:
+                        cost = self._op_attack_insurgent(s, 5, 6, 7)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_DR: cost = self._op_terror_insurgent(s, 5, 6)
                     elif op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
                 elif player.name == "SYNDICATE":
@@ -2790,7 +2908,12 @@ class CubaLibreEnv(gym.Env):
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_SYN: cost = self._op_attack_insurgent(s, 8, 9, 10)
+                    elif op == OP_ATTACK_SYN:
+                        cost = self._op_attack_insurgent(s, 8, 9, 10)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_SYN: cost = self._op_terror_insurgent(s, 8, 9)
                     elif op == OP_BRIBE_SYN: cost = self.op_bribe_syn(s)
                     elif op == OP_CONSTRUCT_SYN: cost = self.op_construct_syn(s)
@@ -2808,7 +2931,7 @@ class CubaLibreEnv(gym.Env):
                         self._sa_free = True
 
                 # After a full Ops, allow an optional Special Activity.
-                if self.phase != PHASE_CHOOSE_TARGET_SPACE:
+                if self.phase not in [PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION, PHASE_CHOOSE_EVENT_OPTION]:
                     self._pending_sa = True
                     self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
                     advance_turn = False
@@ -2880,7 +3003,11 @@ class CubaLibreEnv(gym.Env):
                             advance_turn = False
                             cost = 0
                         else:
-                            cost = self._op_assault_impl(s)
+                            cost = self._op_assault_impl(s, context="LIMOP")
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                     elif op == OP_TRANSPORT:
                         self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s, "limited": True}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
@@ -2893,7 +3020,12 @@ class CubaLibreEnv(gym.Env):
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_M26: cost = self._op_attack_insurgent(s, 2, 3, 4)
+                    elif op == OP_ATTACK_M26:
+                        cost = self._op_attack_insurgent(s, 2, 3, 4)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
                 elif player.name == "DR":
                     if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
@@ -2903,7 +3035,12 @@ class CubaLibreEnv(gym.Env):
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_DR: cost = self._op_attack_insurgent(s, 5, 6, 7)
+                    elif op == OP_ATTACK_DR:
+                        cost = self._op_attack_insurgent(s, 5, 6, 7)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_DR: cost = self._op_terror_insurgent(s, 5, 6)
                 elif player.name == "SYNDICATE":
                     if op == OP_RALLY_SYN: cost = self.op_rally_syn(s)
@@ -2912,7 +3049,12 @@ class CubaLibreEnv(gym.Env):
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
-                    elif op == OP_ATTACK_SYN: cost = self._op_attack_insurgent(s, 8, 9, 10)
+                    elif op == OP_ATTACK_SYN:
+                        cost = self._op_attack_insurgent(s, 8, 9, 10)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_EVENT_OPTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_TERROR_SYN: cost = self._op_terror_insurgent(s, 8, 9)
 
                 if not self._launder_free:
@@ -2922,7 +3064,7 @@ class CubaLibreEnv(gym.Env):
                     self._last_op_paid_cost = 0
 
                 # MAP (shaded): Govt may accompany LimOps with a free Special Activity.
-                if self.phase == PHASE_CHOOSE_TARGET_SPACE:
+                if self.phase in [PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION, PHASE_CHOOSE_EVENT_OPTION]:
                     pass
                 elif player.name == "GOVT" and "MAP_Shaded" in self.capabilities:
                     self._pending_sa = True
@@ -3048,7 +3190,7 @@ class CubaLibreEnv(gym.Env):
 
                     moved = self._move_pieces_with_cash(src, s, 0, 0, 1)
                     if moved <= 0:
-                        raise Exception("No troops available to redeploy")
+                        print(f"  (no troops to redeploy from {src} to {s} — skipping)")
 
                     if self._propaganda_redeploy_troop_mandatory_sources():
                         self._pending_propaganda = {"step": "REDEPLOY_TROOPS_MANDATORY_SRC"}
@@ -3085,7 +3227,8 @@ class CubaLibreEnv(gym.Env):
 
                     moved = self._move_pieces_with_cash(src, s, 0, 0, 1)
                     if moved <= 0:
-                        raise Exception("No troops available to redeploy")
+                        # Troop disappeared between source and destination selection; loop back
+                        print(f"  (Redeploy: no troop left at source, skipping)")
 
                     self._pending_propaganda = {"step": "REDEPLOY_TROOPS_OPTIONAL_SRC"}
                     self.phase = PHASE_CHOOSE_TARGET_SPACE
@@ -3179,7 +3322,14 @@ class CubaLibreEnv(gym.Env):
 
                         if action == (self._main_action_base + MAIN_PASS):
                             # Resolve the Assault after reinforcements.
-                            cost = self._op_assault_impl(int(dest), skip_armored_cars_redeploy=True)
+                            # Resolve the Assault after reinforcements.
+                            is_limited = pending_op.get("limited")
+                            ctx = "REINFORCE_LIMITED" if is_limited else "REINFORCE_FULL"
+                            cost = self._op_assault_impl(int(dest), skip_armored_cars_redeploy=True, context=ctx)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                             player.resources = max(0, int(player.resources) - cost)
                             self._pending_op_target = None
 
@@ -3826,8 +3976,17 @@ class CubaLibreEnv(gym.Env):
                             self._move_cash_between_piece_indices(sp, u, a, tr)
                         revealed += tr
                     print(f"   -> Revealed {revealed} Guerrillas.")
-                    self._op_assault_impl(s)
-
+                    print(f"   -> Revealed {revealed} Guerrillas.")
+                    cost = self._op_assault_impl(s, context="CANTILLO_SH")
+                    
+                    if cost is None:
+                         # Pause for faction selection
+                         self.phase = PHASE_CHOOSE_TARGET_FACTION
+                         self._pending_event_target = None # Clear sweep pending stuff? It was None anyway.
+                         advance_turn = False
+                         return self.observation, reward, done, False, {}
+                    
+                    # If cost returned, finish immediately.
                     self._pending_event_target = None
                     player.eligible = False
                     if not self.keep_eligible_this_action:
@@ -3835,7 +3994,24 @@ class CubaLibreEnv(gym.Env):
                     self.card_action_slot += 1
                     self.phase = PHASE_CHOOSE_MAIN
                     self._pending_main = None
-                    advance_turn = False
+                    advance_turn = False # Event always returns advance_turn=False in step? 
+                    # Wait, if done, we need to advance?
+                    # The original code had advance_turn = False.
+                    # Because step loop handles advance?
+                    # No, return statement exits step.
+                    # If advance_turn is False, turn pointer is NOT updated.
+                    # So next step call continues in PHASE_CHOOSE_MAIN (new turn)?
+                    # No, PHASE_CHOOSE_MAIN usually means "Next Action / Next Card".
+                    # If card_action_slot increments, we are moving to next faction.
+                    # update_turn_pointer is called at end of step loop if advance_turn=True.
+                    # Events usually return False and let next step loop handle it?
+                    # Wait, if I return here, I skip update_turn_pointer.
+                    # Original code (Lines 3945-3955 in Snippet 763):
+                    # returned advance_turn = False.
+                    # But it incremented card_action_slot.
+                    # So next call to step will see PHASE_CHOOSE_MAIN.
+                    # And logic at start of step will pick up next faction.
+                    # So correct.
                     return self.observation, reward, done, False, {}
 
                 elif event == "MASFERRER_UN":
@@ -4767,6 +4943,49 @@ class CubaLibreEnv(gym.Env):
                     self.players[f].resources = int(self.players[f].resources) - amt
                     self.players[3].resources = min(49, int(self.players[3].resources) + amt)
                     print(f" -> Rebel Air Force (Sh): Transferred {amt} (die={die}) from {self.players[f].name} to SYNDICATE.")
+                elif event == "OP_ASSAULT":
+                    s = pending.get("space")
+                    context = pending.get("context")
+                    # Execute with selected faction
+                    cost = self._op_assault_impl(s, target_faction=f, context=context)
+                    
+                    player = self.players[self.current_player_num]
+                    if not self._sa_free:
+                         player.resources = max(0, player.resources - cost)
+                    self._last_op_paid_cost = int(cost)
+                    
+                    self._pending_event_faction = None
+                    
+                    # Determine Next Phase based on Context
+                    if context == "OP" or context == "REINFORCE_FULL":
+                         self._pending_sa = True
+                         self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                         advance_turn = False
+                         return self.observation, reward, done, False, {}
+                    
+                    elif context == "LIMOP" or context == "REINFORCE_LIMITED" or context == "CANTILLO_SH" or context == "SA":
+                         # Check MAP Shaded (Govt LimOp -> SA)
+                         if player.name == "GOVT" and "MAP_Shaded" in self.capabilities and context != "CANTILLO_SH":
+                              self._pending_sa = True
+                              self._sa_free = True
+                              self._sa_from_limited_ops = True
+                              self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                              advance_turn = False
+                              return self.observation, reward, done, False, {}
+                         else:
+                              # End Turn
+                              player.eligible = False
+                              if not self.keep_eligible_this_action:
+                                  self.ineligible_next_card.add(self.current_player_num)
+                              self.card_action_slot += 1
+                              self.phase = PHASE_CHOOSE_MAIN
+                              self._pending_main = None
+                              # Manually advance turn pointer if not done
+                              if not done and not self._cash_transfer_waiting:
+                                   self.update_turn_pointer()
+                              return self.observation, reward, done, False, {}
+
+
                 elif event == "REBEL_AIR_FORCE_UN_FACTION":
                     # f is selected rebel faction (1=M26, 2=DR)
                     faction_name = "M26" if f == 1 else "DR"
@@ -5212,6 +5431,37 @@ class CubaLibreEnv(gym.Env):
                 allowed = pending.get("allowed") or []
                 if opt not in allowed:
                     raise Exception("Selected disallowed option in PHASE_CHOOSE_EVENT_OPTION")
+
+                if event == "OP_ATTACK":
+                    # Resume Attack with selected target_type
+                    # opt: 0=Troops, 1=Police, 2=Base
+                    s = int(pending["space"])
+                    u = int(pending["u"])
+                    a = int(pending["a"])
+                    b = int(pending["b"])
+                    removals = int(pending["removals_left"])
+                    
+                    cost = self._op_attack_insurgent(s, u, a, b, target_type=opt, removals_left=removals, skip_roll=True)
+                    
+                    if cost is None:
+                        # Still paused (e.g. 2nd removal needs selection)
+                        # Phase remains PHASE_CHOOSE_EVENT_OPTION
+                        # _pending_event_option updated by _op_attack_insurgent
+                        return self.observation, reward, done, False, {}
+                    
+                    # Finished
+                    self._pending_event_option = None
+                    if not self._launder_free:
+                        player.resources = max(0, player.resources - cost)
+                        self._last_op_paid_cost = int(cost)
+                    else:
+                        self._last_op_paid_cost = 0
+
+                    if self.phase not in [PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION]:
+                         self._pending_sa = True
+                         self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                         advance_turn = False
+                    return self.observation, reward, done, False, {}
 
                 if event == "FAT_BUTCHER_UN":
                     # 0 = Close Casino (then choose space), 1 = Aid -8 (immediate)
@@ -5991,6 +6241,23 @@ class CubaLibreEnv(gym.Env):
 
                         if int(sp.cash_holders[int(choice)]) <= 0:
                             raise Exception("Meyer Lansky (Un): selected source holder has no cash")
+                        # Check if any valid destination exists before entering DEST_HOLDER
+                        has_dest = any(
+                            int(sp.pieces[idx]) > 0 and int(idx) != int(choice)
+                            for idx in range(len(sp.pieces))
+                        )
+                        if not has_dest:
+                            # No destination available — auto-finish event
+                            print(" -> Meyer Lansky (Un): No valid destination for cash transfer.")
+                            self._pending_event_target = None
+                            player.eligible = False
+                            if not self.keep_eligible_this_action:
+                                self.ineligible_next_card.add(self.current_player_num)
+                            self.card_action_slot += 1
+                            self.phase = PHASE_CHOOSE_MAIN
+                            self._pending_main = None
+                            advance_turn = False
+                            return self.observation, reward, done, False, {}
                         pending_target["src_holder"] = int(choice)
                         pending_target["stage"] = "DEST_HOLDER"
                         self._pending_event_target = pending_target
@@ -6002,6 +6269,17 @@ class CubaLibreEnv(gym.Env):
                         src_holder = pending_target.get("src_holder")
                         if src_holder is None:
                             raise Exception("Meyer Lansky (Un): missing src holder")
+                        # Handle stop action
+                        if choice == stop_choice:
+                            self._pending_event_target = None
+                            player.eligible = False
+                            if not self.keep_eligible_this_action:
+                                self.ineligible_next_card.add(self.current_player_num)
+                            self.card_action_slot += 1
+                            self.phase = PHASE_CHOOSE_MAIN
+                            self._pending_main = None
+                            advance_turn = False
+                            return self.observation, reward, done, False, {}
                         if int(choice) == int(src_holder):
                             raise Exception("Meyer Lansky (Un): destination cannot equal source")
                         if not self._transfer_cash_between_holders(sp, int(src_holder), int(choice)):
@@ -6096,7 +6374,12 @@ class CubaLibreEnv(gym.Env):
                     cost = 0
                     if player.name == "GOVT":
                         if op == OP_AIR_STRIKE: cost = self.op_airstrike(s)
-                        elif op == OP_ASSAULT: cost = self._op_assault_impl(s)
+                        elif op == OP_ASSAULT:
+                            cost = self._op_assault_impl(s, context="SA")
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                     elif player.name == "M26":
                         if op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
                         elif op == OP_KIDNAP_M26: cost = self.op_kidnap_m26(s)
@@ -6128,6 +6411,14 @@ class CubaLibreEnv(gym.Env):
 
         self.factions_acted_this_card = int(self.card_action_slot)
         if self.deck_empty: done = True
+        if done:
+            margins = self.victory_margins()
+            ranking = self.final_victory_ranking()
+            winner = self.factions_list[ranking[0]]
+            print(f"\n{'='*40}")
+            print(f"  GAME OVER (Round {self.rounds_taken}) — {winner} WINS!")
+            print(f"  Margins: GOVT={margins[0]:+d}  M26={margins[1]:+d}  DR={margins[2]:+d}  SYN={margins[3]:+d}")
+            print(f"{'='*40}")
         if self._cash_transfer_waiting and self._cash_transfer_return_player is None:
             self._cash_transfer_return_player = self.current_player_num
             self._cash_transfer_return_phase = self.phase
@@ -6138,8 +6429,6 @@ class CubaLibreEnv(gym.Env):
         # Gymnasium returns: obs, reward, terminated, truncated, info
         terminated = done
         truncated = False
-        # SB3 expects a float reward. Since we rotate players, we return the reward for the current player.
-        # Note: Proper self-play requires a wrapper to align rewards to the training agent.
         scalar_reward = float(reward[self.current_player_num])
         return self.observation, scalar_reward, terminated, truncated, {"rewards": reward}
 
@@ -6187,7 +6476,7 @@ class CubaLibreEnv(gym.Env):
 
         return self.get_govt_cost()
 
-    def _op_assault_impl(self, s, skip_armored_cars_redeploy=False):
+    def _op_assault_impl(self, s, target_faction=None, skip_armored_cars_redeploy=False, context="OP"):
         # 1. Determine Restrictions
         sp = self.board.spaces[s]
         is_restricted = (sp.type in [1, 3])
@@ -6196,7 +6485,6 @@ class CubaLibreEnv(gym.Env):
         print(f"GOVT: ASSAULT {sp.name} {'(Limited)' if is_restricted else '(Full)'}")
 
         # Capability: Armored Cars (Move before Assault)
-        # If this Assault is being resolved after an explicit reinforcement phase, skip redeploy here.
         if "ArmoredCars_Shaded" in self.capabilities and not skip_armored_cars_redeploy:
             for src in self.board.spaces:
                 if int(src.id) == int(s):
@@ -6213,6 +6501,44 @@ class CubaLibreEnv(gym.Env):
         killers = troops + (police if sim else 0)
         u_killers = 0 if sim else police # Standard police only hit Underground
         
+        # 3. Identify Eligible Targets
+        # Factions with pieces in the space.
+        eligible = []
+        # M26 (Idx 1): UG(2), Active(3), Base(4)
+        if sp.pieces[3] > 0 or sp.pieces[4] > 0 or (sp.pieces[2] > 0 and u_killers > 0):
+             eligible.append(1)
+        # DR (Idx 2): UG(5), Active(6), Base(7)
+        if sp.pieces[6] > 0 or sp.pieces[7] > 0 or (sp.pieces[5] > 0 and u_killers > 0):
+             eligible.append(2)
+        # Syn (Idx 3): UG(8), Active(9), Base(10)
+        if sp.pieces[9] > 0 or sp.pieces[10] > 0 or (sp.pieces[8] > 0 and u_killers > 0):
+             eligible.append(3)
+             
+
+
+        if not eligible:
+            print(" -> No eligible targets for Assault.")
+            return self.get_govt_cost()
+
+        if target_faction is None:
+            if len(eligible) > 1:
+                # Multiple targets: Player must choose.
+                self._pending_event_faction = {"event": "OP_ASSAULT", "allowed": eligible, "space": s, "context": context}
+                return None
+            else:
+                target_faction = eligible[0]
+
+        # 4. Execution
+        f_idx = int(target_faction)
+        if f_idx == 1:
+            u, a, b = 2, 3, 4
+        elif f_idx == 2:
+            u, a, b = 5, 6, 7
+        elif f_idx == 3:
+            u, a, b = 8, 9, 10
+        else:
+             return self.get_govt_cost()
+
         killed = 0
         limit = 1 if is_restricted else 999
         
@@ -6225,36 +6551,44 @@ class CubaLibreEnv(gym.Env):
             faction_idx, piece_type = idx_to_piece[piece_idx]
             return self.board.remove_piece(s, faction_idx, piece_type)
 
-        # 3. Execution (Strict Order: U -> A -> B)
-        # Police (U only)
-        for idx in [2, 5, 8]:
-            while u_killers > 0 and sp.pieces[idx] > 0 and killed < limit:
-                remove_insurgent_piece(idx)
-                u_killers -= 1; killed += 1
-                
-        # Troops/SIM (Everything)
-        # Active
+        # Priority: Active -> Bases -> Underground
+        
+        # 1. Active (Killers only)
+        # Note: Police only hit Underground (u_killers), so regular killers (Troops/SIM) hit Active/Base.
         if killers > 0 and killed < limit:
-            for idx in [3, 6, 9]:
-                while killers > 0 and sp.pieces[idx] > 0 and killed < limit:
-                    remove_insurgent_piece(idx)
-                    killers -= 1; killed += 1
-        # Underground
-        if killers > 0 and killed < limit:
-            for idx in [2, 5, 8]:
-                while killers > 0 and sp.pieces[idx] > 0 and killed < limit:
-                    remove_insurgent_piece(idx)
-                    killers -= 1; killed += 1
-        # Bases
-        if killers > 0 and killed < limit:
-            for idx in [4, 7, 10]:
-                gs = sp.pieces[idx-2] + sp.pieces[idx-1]
-                while killers > 0 and sp.pieces[idx] > 0 and killed < limit and gs == 0:
-                    remove_insurgent_piece(idx)
-                    killers -= 1; killed += 1
+            while killers > 0 and sp.pieces[a] > 0 and killed < limit:
+                remove_insurgent_piece(a)
+                killers -= 1; killed += 1
 
-        print(f" -> Killed {killed}")
-        self._queue_cash_transfers_for_space(sp)
+        # 2. Bases (Killers only)
+        if killers > 0 and killed < limit:
+            while killers > 0 and sp.pieces[b] > 0 and killed < limit:
+                remove_insurgent_piece(b)
+                killers -= 1; killed += 1
+                
+        # 3. Underground (Police OR Killers)
+        # Police hit Underground first? Or any?
+        # Rules: "Police units... can Assault only against Underground Guerrillas."
+        # Troops can assault anything.
+        # Order: Active -> Base -> Underground.
+        # So we use Troops for Active/Base first.
+        # Now we are at Underground.
+        # Use available Police (u_killers) first, then remaining Troops (killers).
+        
+        while u_killers > 0 and sp.pieces[u] > 0 and killed < limit:
+            remove_insurgent_piece(u)
+            u_killers -= 1; killed += 1
+
+        if killers > 0 and killed < limit:
+            while killers > 0 and sp.pieces[u] > 0 and killed < limit:
+                remove_insurgent_piece(u)
+                killers -= 1; killed += 1
+
+        print(f" -> Killed {killed} ({self.factions_list[f_idx]})")
+        
+        if killed > 0:
+            self._queue_cash_transfers_for_space(sp)
+            
         return self.get_govt_cost()
 
     def op_transport(self, s):
@@ -6291,34 +6625,119 @@ class CubaLibreEnv(gym.Env):
                     sp.pieces[a] += 1
                     self._move_cash_between_piece_indices(sp, u, a, 1)
         return 1
-    def _op_attack_insurgent(self, s, u, a, b):
+    def _op_attack_insurgent(self, s, u, a, b, target_type=None, removals_left=2, skip_roll=False):
         sp = self.board.spaces[s]; cnt = int(sp.pieces[u] + sp.pieces[a])
         print(f"ATTACK {sp.name} ({cnt})")
         if cnt <= 0:
             print(" -> No guerrilla to Attack.")
             return 0
-        # Activate up to 2 guerrillas
-        revealed = min(int(sp.pieces[u]), 2)
-        sp.pieces[u] -= revealed
-        sp.pieces[a] += revealed
-        if revealed > 0:
-            self._move_cash_between_piece_indices(sp, u, a, revealed)
+            
+        # Activate up to 2 guerrillas (ONLY ON FIRST CALL)
+        # If skip_roll is True, we assume activation already happened?
+        # Activations happen before the roll.
+        # But if we pause for 2nd removal, we shouldn't activate again.
+        # So we need 'activations_done' flag? Or 'skip_activation'.
+        # Actually, removals happen AFTER roll.
+        # If we pause between removals, we are 'post-roll'.
+        # So skip_roll implies skip_setup/activation too?
+        # No, activation happens once.
+        # If we are resuming, we shouldn't re-activate.
         
-        # Raúl capability: M26 may reroll Attack
-        is_m26 = (u == 2 and a == 3)
-        roll = self._roll_die()
-        if "Raul_Unshaded" in self.capabilities and is_m26 and roll > cnt:
-            print(f" -> Roll {roll} (FAIL) - Raúl reroll!")
+        if not skip_roll:
+            # Activate up to 2 guerrillas
+            revealed = min(int(sp.pieces[u]), 2)
+            sp.pieces[u] -= revealed
+            sp.pieces[a] += revealed
+            if revealed > 0:
+                self._move_cash_between_piece_indices(sp, u, a, revealed)
+        
+            # Raúl capability: M26 may reroll Attack
+            is_m26 = (u == 2 and a == 3)
             roll = self._roll_die()
+            if "Raul_Unshaded" in self.capabilities and is_m26 and roll > cnt:
+                print(f" -> Roll {roll} (FAIL) - Raúl reroll!")
+                roll = self._roll_die()
+            
+            if roll > cnt:
+                print(" -> Fail")
+                return 1 # Cost is 1? Yes return 1 ops cost (usually Ops cost resources, Attack costs 1?)
+                # Wait, caller usually does player.resources -= cost.
+                # Attack cost is usually 0? No, resource cost is 1?
+                # Line 6591 returned 1.
+                # Let's check callers. Line 3006: cost = self._op_attack_insurgent...
+                # Yes cost is used.
         
-        if roll <= cnt:
-            k=0
-            for _ in range(2):
-                if sp.pieces[1]>0: sp.pieces[1]-=1; k+=1
-                elif sp.pieces[0]>0: sp.pieces[0]-=1; k+=1
-                elif sp.govt_bases>0: sp.govt_bases-=1; k+=1
-            print(f" -> Killed {k}")
-        else: print(" -> Fail")
+        # If we are here, we are succeeding (or skipping roll).
+        
+        killed_count = 0
+        current_removals = removals_left
+        
+        while current_removals > 0:
+             # Identify Eligible
+             eligible = []
+             # 0: Troops, 1: Police, 2: Bases
+             if sp.pieces[0] > 0: eligible.append(0)
+             if sp.pieces[1] > 0: eligible.append(1)
+             if sp.govt_bases > 0: eligible.append(2)
+             
+             if not eligible:
+                  break
+                  
+             chosen = None
+             if target_type is not None:
+                  chosen = target_type
+                  target_type = None # Consume it
+             elif len(eligible) == 1:
+                  chosen = eligible[0]
+             else:
+                  # Multiple choices -> Pause
+                  # We need to save state.
+                  # What state? removals_left=current_removals.
+                  # And context? "OP_ATTACK".
+                  # Params: u, a, b (targets).
+                  self._pending_event_option = {
+                       "event": "OP_ATTACK", 
+                       "allowed": eligible, 
+                       "removals_left": current_removals, 
+                       "space": s, 
+                       "u": u, "a": a, "b": b
+                  }
+                  # Also need to signal it's a "resume" context?
+                  # Handler will call with skip_roll=True.
+                  return None
+             
+             # Execute Removal
+             if chosen == 0:
+                  sp.pieces[0] -= 1
+                  print(" -> Killed Troop")
+             elif chosen == 1:
+                  sp.pieces[1] -= 1
+                  print(" -> Killed Police")
+             elif chosen == 2:
+                  sp.govt_bases -= 1
+                  print(" -> Killed Base")
+             
+             killed_count += 1
+             current_removals -= 1
+             
+             # Wait, if we removed 1, and loop continues...
+             # We might need to pause AGAIN for the second removal if options changed?
+             # e.g. We had Troops and Police. Removed Troop. Now have Troops and Police left?
+             # Or only Police left?
+             # We must re-eval eligible in next iteration.
+             
+        # Done
+        # If we killed > 0, cash transfer?
+        # Wait, if we paused, 'killed' variable logic in original code (Lines 6524)
+        # self._queue_cash_transfers_for_space(sp)
+        # Make sure we don't double queue.
+        # But cash transfer depends on pieces removed?
+        # If we remove sequentially, we should queue sequentially?
+        # Or queue at end?
+        # _queue_cash_transfers_for_space checks `sp.cash_holders` vs pieces.
+        # So we can call it at end.
+        self._queue_cash_transfers_for_space(sp)
+        
         return 1
     def _op_mafia_attack(self, s, u, a):
         sp = self.board.spaces[s]
@@ -6488,7 +6907,11 @@ class CubaLibreEnv(gym.Env):
         if seed is not None:
             self._seed(seed)
             
-        self.deck = Deck(); self.board = Board(); self.players = []
+        scenario = "standard"
+        if options and "scenario" in options:
+            scenario = options["scenario"]
+
+        self.deck = Deck(scenario=scenario); self.board = Board(); self.players = []
         for i, n in enumerate(self.factions_list):
             f = Faction(i, n)
             if n == "GOVT":
@@ -6509,7 +6932,7 @@ class CubaLibreEnv(gym.Env):
             self.board.add_piece(3, 0, 0); p.available_forces[0] -= 1
         for _ in range(4):
             self.board.add_piece(3, 0, 1); p.available_forces[1] -= 1
-        self.current_player_num = 0; self.turns_taken = 0; self.done = False; self.capabilities = set()
+        self.current_player_num = 0; self.rounds_taken = 0; self.done = False; self.capabilities = set()
         self.deck_empty = False
         self.propaganda_cards_played = 0
         self.final_victory_margins_result = None
@@ -6545,7 +6968,7 @@ class CubaLibreEnv(gym.Env):
         np.random.seed(seed)
     def render(self, mode='human', close=False):
         if close: return
-        print(f"\n--- Turn {self.turns_taken} [{self.factions_list[self.current_player_num]}] Res:{self.players[self.current_player_num].resources} ---")
+        print(f"\n--- Round {self.rounds_taken} [{self.factions_list[self.current_player_num]}] Res:{self.players[self.current_player_num].resources} | Propaganda: {self.propaganda_cards_played}/4 ---")
         if self.current_card: print(f"Card: {self.current_card.name}")
         out = f"{'Space':<15} | {'Govt':<5} | {'M26(U:A)':<8} | {'DR(U:A)':<8} | {'Syn(U:A)':<8}\n" + "-" * 70 + "\n"
         for s in self.board.spaces:

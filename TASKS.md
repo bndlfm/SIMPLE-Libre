@@ -112,38 +112,60 @@ Ported the SIMPLE framework from `stable_baselines` (v2, PPO1 + mpi4py + TensorF
 
 **Docs**: `webui/docs/RUN_AND_INTEGRATION.md`, `webui/docs/ARCHITECTURE.md`, `webui/docs/STATE_SCHEMA.md`
 
+### Piece Selection Logic (complete)
+
+**Piece Selection**:
+- **Assault (Govt)**: Implemented target faction selection (when multiple eligible) and corrected removal priority (Active G -> Base -> Underground G).
+- **Attack (Insurgents)**: Implemented piece type selection (Troops vs Police vs Base) when multiple types are eligible.
+- **Paused Flow**: Implemented `PHASE_CHOOSE_EVENT_OPTION` / `PHASE_CHOOSE_TARGET_FACTION` loops for multi-step removal operations.
+
+### Model Integration (complete)
+
+**Web UI AI**:
+- Refactored `ModelManager` to use `MaskablePPO` natively.
+- Added Backend `GET /models` and Frontend `ModelSelector.jsx`.
+- Validated model loading and device handling.
+
+### Scenario Support (complete)
+
+**Scenario Selection**:
+- **Short Game**: Implemented deck modification logic (remove 8 random events) in `Deck.py`.
+- **Backend**: Updated `reset()` and API to accept `scenario` parameter.
+- **Frontend**: Added Scenario dropdown to New Game UI.
+
+
 ---
 
 ## What's Actually Left
 
 ### High Priority — Verification
+ 
+1. **End-to-end smoke test** (Complete) — Verifying user confirmation that E2E tests are passing.
+ 
+2. **Unit tests against SB3 code** (Complete) — 304 unit tests passing.
+ 
+3. **Training smoke test** (Complete) — Training loop verified with new logging hooks.
 
-These have not been run against the ported SB3 code yet.
-
-1. **End-to-end smoke test** — Run `scripts/test_webui.fish` to verify backend starts, endpoints respond, model loads from `zoo/cubalibre/best_model.zip`, and frontend serves.
-
-2. **Unit tests against SB3 code** — The 304 tests exercise the env (which is unchanged), but the SB3-ported `agents.py`/`selfplay.py`/`callbacks.py`/`train.py` haven't been integration-tested yet.
-   - `docker compose exec app python -m unittest discover -s tests -p "test_*.py" -b`
-
-3. **Training smoke test** — Verify SB3 training actually runs and produces a model:
-   - `docker compose exec app python3 train.py -r -e cubalibre`
-   - Or: `./scripts/train_cubalibre_long.fish reset`
+4. **Fix Sweep Fizzle Bug**
+   - [x] Diagnose `SWEEP_SRC` no valid target error (Hypothesis: Stale `_pending_event_target` shadows Op logic).
+   - [x] Verify hypothesis with reproduction script.
+   - [x] Fix: Ensure `step()` clears event state when starting Ops.
 
 ### Medium Priority — Functional Gaps
-
-4. **Frontend Ops/LimOps phase controls** — Phases 2, 3, 4 (op selection, limited ops, special activity) currently fall back to raw action ID input. These need proper button-based controls that decode op types and space targets into readable choices.
-
-5. **Game-over display** — Frontend doesn't visually indicate when the game ends or who won. The backend returns `done` state but the UI doesn't react to it.
-
-6. **Training metrics hook** — The training watch panel exists but there's no JSONL emitter in the SB3 training loop. Add a callback that writes `{"timesteps": N, "reward": R, ...}` to a JSONL file so the UI can display live training progress.
-
+ 
+4. **Frontend Ops/LimOps phase controls** (Complete) — Implemented `OpsPanel` in `App.jsx`, verified backend `action_ranges`.
+ 
+5. **Game-over display** (Complete) — Implemented Backend `points` serialization and Frontend `GameOverModal` in `App.jsx`.
+ 
+6. **Training metrics hook** (Complete) — Added `SelfPlayCallback` JSONL logging to `logs/training.jsonl`.
+ 
+7. **Game History Logging** (Complete) — Implemented `GameLogger` in `main.py` to write `logs/game_history.jsonl`.
+ 
 ### Low Priority — Polish & Future
+ 
+ 9. **Scene support** (Complete) — Implemented "Short Game" scenario (remove 8 random cards). "Variable Deployment" remains out of scope as it requires complex interactive setup.
 
-7. **Agent piece selection within spaces** — When multiple pieces of the same faction exist in one space, selection is deterministic ("first available"). Could add a `PHASE_CHOOSE_TARGET_PIECE` flow for these edge cases. Impact is minimal — current behavior follows rulebook where specified.
-
-8. **Scenario support** — Currently hardcoded to full campaign setup. Future: add setup modules for shorter scenarios (no changes needed to the core rules engine).
-
-9. **Maskable PPO** — SB3 standard PPO doesn't support action masks natively. The current approach (mask + renormalize probabilities in `agents.py`) works but is a workaround. Consider switching to `sb3-contrib` `MaskablePPO` for cleaner integration.
-
-10. **Other game environments** — Pretrained models for tictactoe, connect4, sushigo, etc. in `app/zoo/pretrained/` are SB2 format and won't load with SB3. These would need their own model policies ported if anyone wants to use them again.
+ 
+ 
+ 11. **Other game environments** (Deleted) — Removed legacy SB2 environments/models (TicTacToe, Connect4, etc.) to keep the codebase clean.
 

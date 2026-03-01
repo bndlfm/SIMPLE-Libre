@@ -56,15 +56,16 @@ class ModelManager:
             self._last_error = f"Unsupported algo: {algo}"
             raise RuntimeError(f"Unsupported algo: {algo}")
 
-        # Try MaskablePPO first (new models), fall back to standard PPO (legacy)
+        self._device = device or "auto"
+
         try:
-            self._model = MaskablePPO.load(path, env=env, device=device)
+            self._model = MaskablePPO.load(path, env=env, device=self._device)
             self._algo = "MaskablePPO"
         except Exception:
-            self._model = PPO.load(path, env=env, device=device)
+            self._model = PPO.load(path, env=env, device=self._device)
             self._algo = "PPO"
+        
         self._path = path
-        self._device = device or "auto"
 
         # Wrap in a SIMPLE Agent so the WebUI uses the same logic as training/test
         from utils.agents import Agent
@@ -99,26 +100,46 @@ class ModelManager:
         if self._model is None:
             raise RuntimeError("Model not loaded.")
 
-        from utils.agents import get_action_probs_sb3, mask_actions, sample_action
-
         info: Dict[str, Any] = {"masked": False, "fallback": False}
-        action_probs = get_action_probs_sb3(self._model, observation)
 
-        if mask_invalid and legal_actions is not None:
-            action_probs = mask_actions(legal_actions, action_probs)
-            info["masked"] = True
+        # Check if we can use MaskablePPO predict directly
+        # SB3 MaskablePPO.predict supports action_masks arg
+        try:
+            masks = legal_actions if mask_invalid and legal_actions is not None else None
+            action, _state = self._model.predict(
+                observation,
+                deterministic=deterministic,
+                action_masks=masks
+            )
+            if isinstance(action, np.ndarray):
+                action = action.item()
+            
+            if masks is not None:
+                info["masked"] = True
+            
+            return int(action), info
 
-        if deterministic:
-            action = int(np.argmax(action_probs))
-        else:
-            action = int(sample_action(action_probs))
+        except TypeError:
+            # Fallback for standard PPO (does not support action_masks)
+            from utils.agents import get_action_probs_sb3, mask_actions, sample_action
 
-        # Verify legality, fallback if needed
-        if legal_actions is not None and int(legal_actions[action]) == 0:
-            legal = np.nonzero(np.asarray(legal_actions, dtype=np.int64))[0]
-            if len(legal) == 0:
-                raise RuntimeError("No legal actions available.")
-            action = int(np.random.choice(legal))
-            info["fallback"] = True
+            action_probs = get_action_probs_sb3(self._model, observation)
 
-        return action, info
+            if mask_invalid and legal_actions is not None:
+                action_probs = mask_actions(legal_actions, action_probs)
+                info["masked"] = True
+
+            if deterministic:
+                action = int(np.argmax(action_probs))
+            else:
+                action = int(sample_action(action_probs))
+
+            # Verify legality, fallback if needed
+            if legal_actions is not None and int(legal_actions[action]) == 0:
+                legal = np.nonzero(np.asarray(legal_actions, dtype=np.int64))[0]
+                if len(legal) == 0:
+                    raise RuntimeError("No legal actions available.")
+                action = int(np.random.choice(legal))
+                info["fallback"] = True
+
+            return int(action), info

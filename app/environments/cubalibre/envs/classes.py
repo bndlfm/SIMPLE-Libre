@@ -59,10 +59,10 @@ class PropagandaCard(Card):
     def __init__(self, id):
         super().__init__(id, "Propaganda!", [], "Victory Check", "Reset")
         self.is_propaganda = True
-
 class Deck():
-    def __init__(self):
+    def __init__(self, scenario="standard"):
         self.cards = []
+        self.scenario = scenario
         self.create()
 
     def create(self):
@@ -78,9 +78,16 @@ class Deck():
             ))
         random.shuffle(events)
         
+        # 1.5 Handle Short Game Scenario
+        if self.scenario == "short":
+            # Remove 8 random cards
+            events = events[8:]
+
         # 2. Split into 4 piles
-        # 48 cards / 4 piles = 12 cards per pile
-        piles = [events[i:i + 12] for i in range(0, len(events), 12)]
+        # Standard: 48 cards / 4 piles = 12 cards per pile
+        # Short: 40 cards / 4 piles = 10 cards per pile
+        cards_per_pile = len(events) // 4
+        piles = [events[i:i + cards_per_pile] for i in range(0, len(events), cards_per_pile)]
         
         # 3. Add 1 Propaganda Card to each pile and shuffle
         self.cards = []
