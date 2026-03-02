@@ -169,3 +169,6 @@ Ported the SIMPLE framework from `stable_baselines` (v2, PPO1 + mpi4py + TensorF
  
  11. **Other game environments** (Deleted) — Removed legacy SB2 environments/models (TicTacToe, Connect4, etc.) to keep the codebase clean.
 
+## Frontend UI Rendering Completed
+- Implemented mapping logic of piece tokens from backend game state to render visually on map
+- Fixed _clear_pending state sync issues and Mosquera / SIM rule calculation bugs in backend

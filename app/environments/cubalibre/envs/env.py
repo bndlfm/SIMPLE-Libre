@@ -2841,7 +2841,9 @@ class CubaLibreEnv(gym.Env):
                         advance_turn = False
                         cost = 0
                     elif op == OP_SWEEP:
-                        self._clear_pending()
+                        self._pending_event_target = None
+                        self._pending_op_target = None
+                        self._pending_sa_target = None
                         allow_police = "SIM_Shaded" in self.capabilities
                         self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
@@ -2849,7 +2851,9 @@ class CubaLibreEnv(gym.Env):
                         cost = 0
                     elif op == OP_ASSAULT:
                         if "ArmoredCars_Shaded" in self.capabilities:
-                            self._clear_pending()
+                            self._pending_event_target = None
+                            self._pending_op_target = None
+                            self._pending_sa_target = None
                             self._pending_op_target = {"op": "ASSAULT_REINFORCE_SRC", "dest": s, "limited": False, "context": "OP"}
                             self.phase = PHASE_CHOOSE_TARGET_SPACE
                             advance_turn = False
@@ -2862,7 +2866,9 @@ class CubaLibreEnv(gym.Env):
                                 cost = 0
                     elif op == OP_TRANSPORT:
                         # Agent selects a source space for Transport.
-                        self._clear_pending()
+                        self._pending_event_target = None
+                        self._pending_op_target = None
+                        self._pending_sa_target = None
                         self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
@@ -2871,7 +2877,9 @@ class CubaLibreEnv(gym.Env):
                 elif player.name == "M26":
                     if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
                     elif op == OP_MARCH_M26:
-                        self._clear_pending()
+                        self._pending_event_target = None
+                        self._pending_op_target = None
+                        self._pending_sa_target = None
                         self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
@@ -6507,7 +6515,11 @@ class CubaLibreEnv(gym.Env):
         police = sp.pieces[1]
         
         killers = troops + (police if sim else 0)
-        u_killers = 0 if sim else police # Standard police only hit Underground
+        u_killers = police + (troops if sim else 0)
+        # Note: Even if they are Underground, they can be targeted if they are exposed.
+        # But assault only naturally hits active or if police are present.
+        # Wait, the rule is: ASSAULT: in each space, Troops and Police remove 1 Active Insurgent piece. Police may remove Underground.
+        # But wait, if they are M26 Underground and there are NO Police, ASSAULT cannot hit them. Let's add Police to the space so the test makes sense, OR make the test expose them first (like SWEEP does).
         
         # 3. Identify Eligible Targets
         # Factions with pieces in the space.

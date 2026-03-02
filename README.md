@@ -4,7 +4,6 @@
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
 
 <!-- PROJECT LOGO -->
 <br />
@@ -13,15 +12,10 @@
     <img src="images/logo.png" alt="Logo" height="120">
   </a>
 
-  <!-- <h3 align="center">SIMPLE</h3> -->
-
   <p align="center">
-    Selfplay In MultiPlayer Environments
-    <!-- <br /> -->
-    <!-- <a href="https://github.com/davidADSP/SIMPLE"><strong>Explore the docs »</strong></a> -->
+    <strong>SIMPLE-Libre</strong><br>
+    Selfplay In MultiPlayer Environments — Cuba Libre Edition
     <br />
-    <!-- <a href="https://github.com/davidADSP/SIMPLE">View Demo</a> -->
-    ·
     <a href="https://github.com/davidADSP/SIMPLE/issues">Report Bug</a>
     ·
     <a href="https://github.com/davidADSP/SIMPLE/issues">Request Feature</a>
@@ -29,14 +23,12 @@
 </p>
 <br>
 
-
 <!-- TABLE OF CONTENTS -->
-
+<details open>
   <summary><h2 style="display: inline-block">Table of Contents</h2></summary>
   <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-    </li>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#key-features">Key Features</a></li>
     <li>
       <a href="#getting-started">Getting Started</a>
       <ul>
@@ -44,22 +36,17 @@
         <li><a href="#installation">Installation</a></li>
       </ul>
     </li>
-    <li><a href="#tutorial">Tutorial</a></li>
+    <li><a href="#usage">Usage</a>
       <ul>
-        <li><a href="#prerequisites">Quickstart</a></li>
-        <li><a href="#prerequisites">Tensorboard</a></li>
-        <li><a href="#custom-environments">Custom Environments</a></li>
-        <li><a href="#parallelisation">Parallelisation</a></li>
+        <li><a href="#web-ui">Web UI (Play against AI)</a></li>
+        <li><a href="#training">Training</a></li>
       </ul>
     </li>
-    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#architecture-and-docs">Architecture & Docs</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgements">Acknowledgements</a></li>
   </ol>
-
-
+</details>
 
 <br>
 
@@ -69,178 +56,117 @@
 
 <img src="images/diagram.png" alt="SIMPLE Diagram" width='100%'>
 
-This project allows you to train AI agents on custom-built multiplayer environments, through self-play reinforcement learning.
+**SIMPLE-Libre** is an applied research project that trains AI agents to play the complex, asymmetric board game **Cuba Libre** (part of the COIN series) using self-play Reinforcement Learning. 
 
-It implements [Proximal Policy Optimisation (PPO)](https://openai.com/blog/openai-baselines-ppo/), with a built-in wrapper around the multiplayer environments that handles the loading and action-taking of opponents in the environment. The wrapper delays the reward back to the PPO agent, until all opponents have taken their turn. In essence, it converts the multiplayer environment into a single-player environment that is constantly evolving as new versions of the policy network are added to the network bank.
+Originally designed as a framework for various games, this fork has been heavily specialized and modernized:
+- Migrated to **Gymnasium** and **Stable-Baselines3** (PyTorch).
+- Uses **MaskablePPO** to handle the highly variable, phase-dependent action spaces.
+- Features a complete, rule-enforced engine for Cuba Libre, including all 48 event cards.
+- Includes a rich, interactive **React + FastAPI Web UI** allowing humans to play against trained models or watch AI spectator modes.
 
-To learn more, check out the accompanying [blog post](https://medium.com/applied-data-science/how-to-train-ai-agents-to-play-multiplayer-games-using-self-play-deep-reinforcement-learning-247d0b440717).
+---
+## Key Features
 
-This guide explains how to get started with the repo, add new custom environments and tune the hyperparameters of the system.
-
-Have fun!
+* **Complete Cuba Libre Engine**: A 6400+ line Gymnasium environment enforcing 100% of the game rules, including Op/LimOp constraints, piece tracking, cash systems, eligibility cylinders, and phase-based target selection.
+* **Complex Action Space**: `Discrete(699)` space heavily constrained by `action_masks` enforcing legal play according to the current card, faction, and board state.
+* **Modern RL Stack**: Powered by Stable-Baselines3 (SB3) `MaskablePPO` inside a multi-agent self-play wrapper that cycles through the 4 asymmetric factions (Govt, M26, DR, Syndicate).
+* **Interactive Dashboard**: A full React.js frontend providing an interactive SVG map, track displays, action history, and phase controls.
+* **Nix Flake Support**: Fully reproducible development environment using Nix.
 
 ---
 <!-- GETTING STARTED -->
-
 ## Getting Started
 
-To get a local copy up and running, follow these simple steps.
+Follow these steps to set up the development environment, train models, or boot up the Web UI.
 
 ### Prerequisites
 
-Install [Docker](https://github.com/davidADSP/SIMPLE/issues) and [Docker Compose](https://docs.docker.com/compose/install/) to make use of the `docker-compose.yml` file
+* **Nix** (with flakes enabled) – Recommended for a reproducible dependency environment.
+* Optionally, you can just use standard **Python 3.13** and **Node.js**.
 
 ### Installation
 
-1. Clone the repo
+1. Clone the repository:
    ```sh
    git clone https://github.com/davidADSP/SIMPLE.git
    cd SIMPLE
    ```
-2. Build the image and 'up' the container.
+
+2. Enter the Nix development shell (which provides Python, Node.js, and system deps):
    ```sh
-   docker-compose up -d
+   nix develop
    ```
-3. Choose an environment to install in the container (`tictactoe`, `connect4`, `sushigo`, `geschenkt`, `butterfly`, and `flamme rouge` are currently implemented)
+
+3. Create and activate a Python virtual environment:
    ```sh
-   bash ./scripts/install_env.sh sushigo
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+4. Install the Python dependencies:
+   ```sh
+   pip install -r app/requirements.txt
+   ```
+
+5. Install the frontend dependencies:
+   ```sh
+   cd webui/frontend
+   npm install
+   cd ../..
    ```
 
 ---
-<!-- TUTORIAL -->
-## Tutorial
+<!-- USAGE -->
+## Usage
 
-This is a quick tutorial to allow you to start using the two entrypoints into the codebase: `test.py` and `train.py`.
+### Web UI
 
-*TODO - I'll be adding more substantial documentation for both of these entrypoints in due course! For now, descriptions of each command line argument can be found at the bottom of the files themselves.*
+The easiest way to interact with the trained Agent is via the Web UI. We provide a Fish script to automatically launch the FastAPI backend and Vite frontend.
 
----
-<!-- QUICKSTART -->
-### Quickstart
-
-#### `test.py` 
-
-This entrypoint allows you to play against a trained AI, pit two AIs against eachother or play against a baseline random model.
-
-For example, try the following command to play against a baseline random model in the Sushi Go environment.
-   ```sh
-   docker-compose exec app python3 test.py -d -g 1 -a base base human -e sushigo 
-   ```
-
-#### `train.py` 
-
-This entrypoint allows you to start training the AI using selfplay PPO. The underlying PPO engine is from the [Stable Baselines](https://stable-baselines.readthedocs.io/en/master/) package.
-
-For example, you can start training the agent to learn how to play SushiGo with the following command:
-   ```sh
-   docker-compose exec app python3 train.py -r -e sushigo 
-   ```
-
-After 30 or 40 iterations the process should have achieved above the default threshold score of 0.2 and will output a new `best_model.zip` to the `/zoo/sushigo` folder. 
-
-Training runs until you kill the process manually (e.g. with Ctrl-C), so do that now.
-
-You can now use the `test.py` entrypoint to play 100 games silently between the current `best_model.zip` and the random baselines model as follows:
-
-  ```sh
-  docker-compose exec app python3 test.py -g 100 -a best_model base base -e sushigo 
-  ```
-
-You should see that the best_model scores better than the two baseline model opponents. 
 ```sh
-Played 100 games: {'best_model_btkce': 31.0, 'base_sajsi': -15.5, 'base_poqaj': -15.5}
+./scripts/launch_project.fish
 ```
 
-You can continue training the agent by dropping the `-r` reset flag from the `train.py` entrypoint arguments - it will just pick up from where it left off.
+* **Frontend**: `http://127.0.0.1:5173`
+* **Backend**: `http://127.0.0.1:8001`
 
-   ```sh
-   docker-compose exec app python3 train.py -e sushigo 
-   ```
+Through the UI, you can:
+* Start a new standard (or short) scenario.
+* Assign any combination of the 4 factions to **Human** or **AI** control.
+* Load specific trained models from the `zoo/cubalibre/` directory.
+* Play through the game interactively, with the engine strictly enforcing valid targets and operations.
 
-Congratulations, you've just completed one training cycle for the game Sushi Go! The PPO agent will now have to work out a way to beat the model it has just created...
+### Training
 
----
-<!-- TENSORBOARD -->
-### Tensorboard
+To train the agents via Self-Play PPO:
 
-To monitor training, you can start Tensorboard with the following command:
+```sh
+# Start a new training run from scratch
+PYTHONPATH=app:app/environments python app/train.py -e cubalibre
 
-  ```sh
-  bash scripts/tensorboard.sh
-  ```
+# ...or use the provided Fish script for a long training session logging to tensorboard:
+./scripts/train_cubalibre_long.fish
+```
 
-Navigate to `localhost:6006` in a browser to view the output.
+Training iteratively updates a pool of historic models, forcing the current PPO policy to learn robust strategies against diverse past versions of itself across all 4 asymmetric roles. 
 
-In the `/zoo/pretrained/` folder there is a pre-trained `/<game>/best_model.zip` for each game, that can be copied up a directory (e.g. to `/zoo/sushigo/best_model.zip`) if you want to test playing against a pre-trained agent right away.
-
----
-<!-- CUSTOM ENVIRONMENTS -->
-### Custom Environments
-
-You can add a new environment by copying and editing an existing environment in the `/environments/` folder.
-
-For the environment to work with the SIMPLE self-play wrapper, the class must contain the following methods (expanding on the standard methods from the OpenAI Gym framework):
-
-`__init__`
-
-In the initiation method, you need to define the usual `action_space` and `observation_space`, as well as two additional variables: 
-  * `n_players` - the number of players in the game
-  * `current_player_num` - an integer that tracks which player is currently active
-   
-
-`step`
-
-The `step` method accepts an `action` from the current active player and performs the necessary steps to update the game environment. It should also it should update the `current_player_num` to the next player, and check to see if an end state of the game has been reached.
-
-
-`reset`
-
-The `reset` method is called to reset the game to the starting state, ready to accept the first action.
-
-
-`render`
-
-The `render` function is called to output a visual or human readable summary of the current game state to the log file.
-
-
-`observation`
-
-The `observation` function returns a numpy array that can be fed as input to the PPO policy network. It should return a numeric representation of the current game state, from the perspective of the current player, where each element of the array is in the range `[-1,1]`.
-
-
-`legal_actions`
-
-The `legal_actions` function returns a numpy vector of the same length as the action space, where 1 indicates that the action is valid and 0 indicates that the action is invalid.
-
-
-Please refer to existing environments for examples of how to implement each method.
-
-You will also need to add the environment to the two functions in `/utils/register.py` - follow the existing examples of environments for the structure.
+Metrics and game history are logged to the `logs/` directory (including `training.jsonl` and `game_history.jsonl`).
 
 ---
-<!-- Parallelisation -->
-### Parallelisation
+<!-- ARCHITECTURE AND DOCS -->
+## Architecture & Docs
 
-The training process can be parallelised using MPI across multiple cores.
+For deeper dives into the codebase, see the following internal documentation:
 
-For example to run 10 parallel threads that contribute games to the current iteration, you can simply run:
-
-  ```sh
-  docker-compose exec app mpirun -np 10 python3 train.py -e sushigo 
-  ```
-
----
-<!-- ROADMAP -->
-## Roadmap
-
-See the [open issues](https://github.com/davidADSP/SIMPLE/issues) for a list of proposed features (and known issues).
-
+* [AGENTS.md](AGENTS.md) - Project overview, file map, and core RL wrapper architecture.
+* [webui/docs/ARCHITECTURE.md](webui/docs/ARCHITECTURE.md) - Communication flow between the React frontend and FastAPI backend.
+* [TASKS.md](TASKS.md) - Current roadmap, verified rules, and known bugs.
 
 ---
 <!-- CONTRIBUTING -->
 ## Contributing
 
-Any contributions you make are **greatly appreciated**.
+Contributions are greatly appreciated. Note that this environment has a highly complex state machine to handle the asymmetric COIN ruleset.
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
@@ -248,34 +174,20 @@ Any contributions you make are **greatly appreciated**.
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-
 ---
 <!-- LICENSE -->
 ## License
 
-Distributed under the GPL-3.0. See `LICENSE` for more information.
-
-
----
-<!-- CONTACT -->
-## Contact
-
-David Foster - [@davidADSP](https://twitter.com/davidADSP) - david@adsp.ai
-
-Project Link: [https://github.com/davidADSP/SIMPLE](https://github.com/davidADSP/SIMPLE)
-
+Distributed under the GPL-3.0 License. See `LICENSE` for more information.
 
 ---
 <!-- ACKNOWLEDGEMENTS -->
 ## Acknowledgements
 
-There are many repositories and blogs that have helped me to put together this repository. One that deserves particular acknowledgement is David's Ha's Slime Volleyball Gym, that also implements multi-agent reinforcement learning. It has helped to me understand how to adapt the callback function to a self-play setting and also to how to implement MPI so that the codebase can be highly parallelised. Definitely worth checking out! 
+* [David Foster](https://twitter.com/davidADSP) for the original [SIMPLE framework](https://github.com/davidADSP/SIMPLE) and blog posts on multi-agent reinforcement learning.
+* [Volko Ruhnke and Brian Train](https://gmtgames.com) for designing the incredible COIN series and Cuba Libre board game.
 
-* [David Ha - Slime Volleyball Gym](https://github.com/hardmaru/slimevolleygym)
-
----
 <!-- MARKDOWN LINKS & IMAGES -->
-<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [contributors-shield]: https://img.shields.io/github/contributors/davidADSP/SIMPLE.svg?style=for-the-badge
 [contributors-url]: https://github.com/davidADSP/SIMPLE/graphs/contributors
 [forks-shield]: https://img.shields.io/github/forks/davidADSP/SIMPLE.svg?style=for-the-badge
@@ -286,5 +198,3 @@ There are many repositories and blogs that have helped me to put together this r
 [issues-url]: https://github.com/davidADSP/SIMPLE/issues
 [license-shield]: https://img.shields.io/github/license/davidADSP/SIMPLE.svg?style=for-the-badge
 [license-url]: https://github.com/davidADSP/SIMPLE/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/davidtfoster

@@ -1,2 +1,16 @@
 # Created by venv; see https://docs.python.org/3/library/venv.html
 *.pyc
+__pycache__
+webui/frontend/node_modules
+logs
+webui/frontend/dist
+tests/__pycache__
+tests/cubalibre/__pycache__
+app/__pycache__
+app/environments/cubalibre/__pycache__
+app/environments/cubalibre/envs/__pycache__
+app/environments/cubalibre/tests/__pycache__
+app/engines/cubalibre/__pycache__
+webui/backend/app/__pycache__
+logs/
+.nix-cache
