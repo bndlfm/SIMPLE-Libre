@@ -663,6 +663,7 @@ export default function App() {
             <div className="mapStage" style={{ marginTop: 10 }}>
               <img className="mapImg" src={mapImageUrl} alt="Cuba Libre Map" />
               <div className="mapOverlay">
+                {state && <SpacePieces board={state.board} />}
                 {SPACE_HITBOXES.map((hb) => {
                   const selected = selectedSpaceId === hb.id
                   const style = {
