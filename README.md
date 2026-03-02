@@ -185,7 +185,7 @@ Distributed under the GPL-3.0 License. See `LICENSE` for more information.
 ## Acknowledgements
 
 * [David Foster](https://twitter.com/davidADSP) for the original [SIMPLE framework](https://github.com/davidADSP/SIMPLE) and blog posts on multi-agent reinforcement learning.
-* [Volko Ruhnke and Brian Train](https://gmtgames.com) for designing the incredible COIN series and Cuba Libre board game.
+* [Volko Ruhnke and Jeff Grossman](https://gmtgames.com) for designing the incredible COIN series and Cuba Libre board game.
 
 <!-- MARKDOWN LINKS & IMAGES -->
 [contributors-shield]: https://img.shields.io/github/contributors/davidADSP/SIMPLE.svg?style=for-the-badge
