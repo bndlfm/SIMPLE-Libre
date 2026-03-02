@@ -6474,11 +6474,19 @@ class CubaLibreEnv(gym.Env):
                 if mv > 0:
                     self._move_pieces_with_cash(adj, s, 0, 1, mv)
 
-        rev=0; cubes=sp.pieces[0]+sp.pieces[1]
-        for idx in [2,5,8]:
-            h=sp.pieces[idx]; tr=h if sp.type in [0,2,4] else min(h,cubes)
-            if tr>0:
-                sp.pieces[idx]-=tr; sp.pieces[idx+1]+=tr; rev+=tr
+        rev = 0
+        cubes = int(sp.pieces[0]) + int(sp.pieces[1])
+        # Forest space (type 1) halves cubes
+        budget = (cubes // 2) if sp.type == 1 else cubes
+
+        for idx in [2, 5, 8]:
+            h = int(sp.pieces[idx])
+            tr = min(h, budget)
+            if tr > 0:
+                sp.pieces[idx] -= tr
+                sp.pieces[idx + 1] += tr
+                rev += tr
+                budget -= tr  # Consume budget
                 self._move_cash_between_piece_indices(sp, idx, idx + 1, tr)
         print(f" -> Revealed {rev}")
 
