@@ -1,0 +1,15 @@
+{"timestamp": 1772424557.385969, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 1, "actor": 2, "action": 2, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.387539, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 2, "actor": 2, "action": 150, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3880281, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 3, "actor": 2, "action": 0, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3883095, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 4, "actor": 1, "action": 0, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3886156, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 5, "actor": 3, "action": 343, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3891497, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 6, "actor": 3, "action": 584, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3894558, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 7, "actor": 1, "action": 1, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.3897161, "game_id": "2c8f33f1-5a15-482a-9c16-3b8579a48e4c", "step": 8, "actor": 1, "action": 4, "reward": [0.0, 0.0, 0.0, 0.0], "done": false, "type": "ai"}
+{"timestamp": 1772424557.4046924, "game_id": "865bf0c2-0c49-4792-8d01-9fbb866daa68", "step": 1, "actor": 2, "action": 2, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.4053211, "game_id": "865bf0c2-0c49-4792-8d01-9fbb866daa68", "step": 2, "actor": 2, "action": 159, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.4058495, "game_id": "865bf0c2-0c49-4792-8d01-9fbb866daa68", "step": 3, "actor": 2, "action": 0, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.4061086, "game_id": "865bf0c2-0c49-4792-8d01-9fbb866daa68", "step": 4, "actor": 3, "action": 1, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.406543, "game_id": "865bf0c2-0c49-4792-8d01-9fbb866daa68", "step": 5, "actor": 3, "action": 3, "reward": [0.0, 0.0, 0.0, 0.0], "done": false, "type": "ai"}
+{"timestamp": 1772424557.4197748, "game_id": "0185d18a-097d-4b79-94fa-29ae100924df", "step": 1, "actor": 3, "action": 1, "reward": 0.0, "done": false, "type": "ai"}
+{"timestamp": 1772424557.420298, "game_id": "0185d18a-097d-4b79-94fa-29ae100924df", "step": 2, "actor": 3, "action": 3, "reward": 0.0, "done": false, "type": "ai"}
