@@ -12,3 +12,4 @@ app/environments/cubalibre/tests/__pycache__
 app/engines/cubalibre/__pycache__
 webui/backend/app/__pycache__
 logs/
+.nix-cache
