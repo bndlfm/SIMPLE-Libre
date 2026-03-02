@@ -121,9 +121,13 @@ Follow these steps to set up the development environment, train models, or boot 
 
 ### Web UI
 
-The easiest way to interact with the trained Agent is via the Web UI. We provide a Fish script to automatically launch the FastAPI backend and Vite frontend.
+The easiest way to interact with the trained Agent is via the Web UI. We provide a script to automatically launch the FastAPI backend and Vite frontend.
 
 ```sh
+# using bash/sh
+./scripts/launch_project.sh
+
+# or using fish
 ./scripts/launch_project.fish
 ```
 
@@ -144,7 +148,9 @@ To train the agents via Self-Play PPO:
 # Start a new training run from scratch
 PYTHONPATH=app:app/environments python app/train.py -e cubalibre
 
-# ...or use the provided Fish script for a long training session logging to tensorboard:
+# Use the provided Bash or Fish scripts for a long training session logging to tensorboard:
+./scripts/train_cubalibre_long.sh
+# or
 ./scripts/train_cubalibre_long.fish
 ```
 
