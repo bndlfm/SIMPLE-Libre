@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet, apiPost, getBaseUrl, setBaseUrl } from './api.js'
 import { SPACE_HITBOXES } from './mapLayout.js'
 import ModelSelector from './ModelSelector'
+import { SpacePieces } from './PieceRender.jsx'
+
 
 function factionNameFromId(id) {
   if (id === 0) return 'GOVT'
@@ -687,6 +689,9 @@ export default function App() {
                       title={hb.name}
                     >
                       <div className="hitboxLabel">{hb.id}: {hb.name}</div>
+                      {state.spaces.find(s => s.id === hb.id) ? (
+                        <SpacePieces space={state.spaces.find(s => s.id === hb.id)} />
+                      ) : null}
                     </div>
                   )
                 })}

@@ -99,7 +99,7 @@ class TestCard6Mosquera(unittest.TestCase):
         sp = self.env.board.spaces[mountain]
         sp.type = 3
         sp.pieces[0] = 3  # Troops
-        sp.pieces[2] = 2  # M26 Underground
+        sp.pieces[3] = 2  # M26 Active (so Troops can hit them)
         sp.update_control()
 
         enter_ops = self.env._main_action_base + MAIN_OPS
