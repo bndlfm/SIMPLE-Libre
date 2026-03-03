@@ -6400,6 +6400,7 @@ class CubaLibreEnv(gym.Env):
                             cost = self.op_assassinate_hitmen(s)
 
                     if not self._sa_free:
+                        # Special Activities usually don't have resource costs except Bribe, but cost is returned.
                         player.resources = max(0, player.resources - cost)
                     # Any executed Special Activity prevents Launder.
                     self._last_op_paid_cost = 0
@@ -6474,11 +6475,19 @@ class CubaLibreEnv(gym.Env):
                 if mv > 0:
                     self._move_pieces_with_cash(adj, s, 0, 1, mv)
 
-        rev=0; cubes=sp.pieces[0]+sp.pieces[1]
-        for idx in [2,5,8]:
-            h=sp.pieces[idx]; tr=h if sp.type in [0,2,4] else min(h,cubes)
-            if tr>0:
-                sp.pieces[idx]-=tr; sp.pieces[idx+1]+=tr; rev+=tr
+        rev = 0
+        cubes = int(sp.pieces[0]) + int(sp.pieces[1])
+        # Forest space (type 1) halves cubes
+        budget = (cubes // 2) if sp.type == 1 else cubes
+
+        for idx in [2, 5, 8]:
+            h = int(sp.pieces[idx])
+            tr = min(h, budget)
+            if tr > 0:
+                sp.pieces[idx] -= tr
+                sp.pieces[idx + 1] += tr
+                rev += tr
+                budget -= tr  # Consume budget
                 self._move_cash_between_piece_indices(sp, idx, idx + 1, tr)
         print(f" -> Revealed {rev}")
 
@@ -6623,6 +6632,8 @@ class CubaLibreEnv(gym.Env):
                     self.board.remove_piece(s, faction_idx, piece_type)
                     k+=1
                     break
+        if k > 0:
+            self._queue_cash_transfers_for_space(sp)
         print(f" -> Killed {k}"); return 0
     def _op_march_insurgent(self, s, u, a):
         sp=self.board.spaces[s]; print(f"MARCH {sp.name}")
@@ -6841,7 +6852,7 @@ class CubaLibreEnv(gym.Env):
         self.players[0].resources-=st; self.players[1].resources+=st
         if "Raul_Shaded" in self.capabilities:
             self.shift_aid(2 * int(st))
-        return 1
+        return 0
     def op_rally_dr(self, s): return self._op_rally_generic(s,5,6,7,2,0)
     def op_assassinate_dr(self, s):
         self._op_terror_insurgent(s,5,6); print("DR: ASSASSINATE"); sp=self.board.spaces[s]
