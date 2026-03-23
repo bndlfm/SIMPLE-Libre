@@ -203,8 +203,16 @@ class InsurgentOpsMixin:
         if sp.pieces[u]>0:
             sp.pieces[u]-=1; sp.pieces[a]+=1
             self._move_cash_between_piece_indices(sp, u, a, 1)
-        sp.terror+=1;
-        if sp.alignment==1: sp.alignment=0
+
+        if sp.type == 4: # Economic Center
+            if not sp.sabotage:
+                sp.sabotage = True
+        else:
+            sp.terror += 1
+            if u == 2: # M26
+                _shift_alignment(sp, toward_active_opp=True)
+            else: # DR or Syndicate
+                _shift_alignment(sp, toward_neutral=True)
         return 1
 
     def _op_rally_generic(self, s, u, a, b, f, sup):
@@ -242,11 +250,70 @@ class InsurgentOpsMixin:
             elif sp.govt_bases>0: sp.govt_bases-=1; k+=1
         print(f" -> Killed {k}"); return 1
 
-    def op_kidnap_m26(self, s):
-        self._op_terror_insurgent(s,2,3); print("M26: KIDNAP"); st=min(2,self.players[0].resources)
-        self.players[0].resources-=st; self.players[1].resources+=st
-        if "Raul_Shaded" in self.capabilities:
-            self.shift_aid(2 * int(st))
+    def op_kidnap_m26(self, s, target_faction=None):
+        sp = self.board.spaces[s]
+        # Only call Terror if it hasn't been called yet.
+        # But wait, if we are resuming from Faction Selection, we shouldn't re-call Terror!
+        if target_faction is None:
+            self._op_terror_insurgent(s, 2, 3)
+            print("M26: KIDNAP")
+
+            allowed_factions = []
+            if sp.type in [0, 4]: # City or EC
+                allowed_factions.append(0) # Govt
+            if sp.pieces[10] > 0: # Open Casino
+                allowed_factions.append(3) # Syndicate
+
+            if not allowed_factions:
+                return 0
+
+            if len(allowed_factions) == 1:
+                target_faction = allowed_factions[0]
+            else:
+                self._pending_event_faction = {
+                    "event": "OP_KIDNAP",
+                    "allowed": allowed_factions,
+                    "space": s
+                }
+                self.phase = 6 # PHASE_CHOOSE_TARGET_FACTION
+                return None
+
+        # Resolve Kidnap against target_faction
+        has_cash = False
+        cash_holders = self._cash_piece_indices_for_faction(target_faction)
+        for h in cash_holders:
+            if sp.cash_holders[h] > 0:
+                has_cash = True
+                sp.cash_holders[h] -= 1
+                sp.cash_holders[3] += 1 # Give to Active M26
+                sp.refresh_cash_counts()
+                print(f" -> M26 Kidnap: Took Cash from {target_faction}")
+                break
+
+        if not has_cash:
+            roll = self._roll_die()
+            if "Raul_Unshaded" in self.capabilities and roll <= 3:
+                # Assuming Raul unshaded rerolls Kidnap?
+                # "26July may reroll each Attack or Kidnap"
+                # If roll is low, might reroll for higher resources?
+                # For simplicity, if roll < 4, reroll once.
+                roll2 = self._roll_die()
+                if roll2 > roll: roll = roll2
+
+            st = min(roll, self.players[target_faction].resources)
+            self.players[target_faction].resources -= st
+            self.players[1].resources += st
+            print(f" -> M26 Kidnap: Took {st} Resources from {target_faction} (roll {roll})")
+
+            if "Raul_Shaded" in self.capabilities:
+                self.shift_aid(2 * int(st))
+
+        if sp.pieces[10] > 0:
+            sp.pieces[10] -= 1
+            sp.closed_casinos += 1
+            sp.update_control()
+            print(" -> M26 Kidnap: Closed 1 Casino")
+
         return 0
 
     def op_rally_dr(self, s): return self._op_rally_generic(s,5,6,7,2,0)

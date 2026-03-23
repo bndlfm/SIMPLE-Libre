@@ -616,7 +616,10 @@ class StepMixin:
                             cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
                     elif op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
-                    elif op == OP_KIDNAP_M26: cost = self.op_kidnap_m26(s)
+                    elif op == OP_KIDNAP_M26:
+                        cost = self.op_kidnap_m26(s)
+                        if cost is None:
+                            return self.observation, reward, done, False, {}
                 elif player.name == "DR":
                     if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
                     elif op == OP_MARCH_DR:
@@ -2693,6 +2696,27 @@ class StepMixin:
                          advance_turn = False
                     return self.observation, reward, done, False, {}
 
+                if event == "OP_KIDNAP":
+                    s = pending["space"]
+                    cost = self.op_kidnap_m26(s, target_faction=f)
+                    self._pending_event_faction = None
+                    if not self._sa_free:
+                         player.resources = max(0, player.resources - cost)
+                    self._last_op_paid_cost = int(cost)
+
+                    player.eligible = False
+                    if not self.keep_eligible_this_action:
+                        self.ineligible_next_card.add(self.current_player_num)
+                    self.card_action_slot += 1
+                    self.phase = 0 # PHASE_CHOOSE_MAIN
+                    self._pending_main = None
+                    self._pending_sa = None
+                    self._sa_free = False
+                    self._sa_from_limited_ops = False
+                    self._sa_restrict_op = None
+                    self._sa_restrict_space = None
+                    return self.observation, reward, done, False, {}
+
                 if event == "REBEL_AIR_FORCE_SH":
                     # Transfer 1 die roll resources from selected rebel faction to Syndicate.
                     die = int(self._roll_die())
@@ -4130,7 +4154,10 @@ class StepMixin:
                                 cost = 0
                     elif player.name == "M26":
                         if op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
-                        elif op == OP_KIDNAP_M26: cost = self.op_kidnap_m26(s)
+                        elif op == OP_KIDNAP_M26:
+                            cost = self.op_kidnap_m26(s)
+                            if cost is None:
+                                return self.observation, reward, done, False, {}
                     elif player.name == "DR":
                         if op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
                     elif player.name == "SYNDICATE":
