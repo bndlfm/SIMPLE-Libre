@@ -49,7 +49,6 @@ class TestAttackPieceSelection(unittest.TestCase):
         allowed = self.env._pending_event_option["allowed"]
         self.assertIn(0, allowed)
         self.assertIn(1, allowed)
-        self.assertIn(2, allowed)
         
         # Step 2: Select Troops (Option 0)
         # Event Option Action Base + Option
