@@ -88,6 +88,7 @@ class TestCashHolderMovement(unittest.TestCase):
         s_id = 8  # Camaguey City (City)
         sp = self.env.board.spaces[s_id]
         sp.pieces[2] = 2  # M26 Underground
+        sp.pieces[0] = 1  # Govt Troops to do the sweeping
         self.env._add_cash_marker(sp, 1, preferred_idx=2)
 
         self.env._op_sweep_impl(s_id)
