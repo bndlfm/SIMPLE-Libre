@@ -8,7 +8,7 @@ from ..data import EVENT_DECK_DATA
 from ..events import resolve_event, _free_ambush_against_govt, _free_ambush_against_govt_bases_first, _shift_alignment
 
 class StepMixin:
-    def step(self, action):
+    def _internal_step(self, action):
         if self.deck_empty:
              return self.observation, 0.0, True, False, {"rewards": [0.0] * self.n_players}
         reward = [0.0] * self.n_players; done = False
@@ -1274,6 +1274,13 @@ class StepMixin:
                             return self.observation, reward, done, False, {}
 
                         print(" -> Fat Butcher (Sh): No closed Casino to open.")
+                        player.eligible = False
+                        if not self.keep_eligible_this_action:
+                            self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        return self.observation, reward, done, False, {}
                     else:
                         sp = self.board.spaces[s]
                         print(f" -> Fat Butcher (Sh): Open Casino in {sp.name}.")
@@ -1283,6 +1290,13 @@ class StepMixin:
                             sp.update_control()
                         else:
                             print(" -> Fat Butcher (Sh): No closed Casino in selected space.")
+                        player.eligible = False
+                        if not self.keep_eligible_this_action:
+                            self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        return self.observation, reward, done, False, {}
 
                 elif event == "FAT_BUTCHER_UN":
                     sp = self.board.spaces[s]
@@ -1293,6 +1307,13 @@ class StepMixin:
                         sp.update_control()
                     else:
                         print(" -> Fat Butcher (Un): No open Casino in selected space.")
+                        player.eligible = False
+                        if not self.keep_eligible_this_action:
+                            self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        return self.observation, reward, done, False, {}
 
                 elif event == "MAP_UN":
                     sp = self.board.spaces[s]
