@@ -933,6 +933,10 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
             print(" -> No eligible factions left. Next Card.")
             if self.draw_next_card(): self.update_turn_pointer()
 
+
+    def step(self, action):
+        return self._internal_step(action)
+
     @property
     def observation(self):
         # Header (length 15)

@@ -901,15 +901,12 @@ class LegalActionsMixin:
                 break
             safety += 1
             player = self.players[self.current_player_num]
-            if self.phase == PHASE_CHOOSE_MAIN and not player.eligible:
+            if self.phase == 0 and not player.eligible:
                 print(f"  (auto-skip ineligible {player.name})")
                 self.card_action_slot += 1
                 self.update_turn_pointer()
                 la = np.array(self.legal_actions, dtype=bool)
-            elif self.phase in (PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION,
-                                PHASE_CHOOSE_EVENT_OPTION, PHASE_CHOOSE_TARGET_PIECE,
-                                PHASE_CHOOSE_OP_ACTION, PHASE_CHOOSE_LIMITED_OP_ACTION,
-                                PHASE_CHOOSE_SPECIAL_ACTIVITY):
+            elif self.phase in [5, 6, 7, 8, 2, 3, 4]:
                 # Event / multi-step action fizzled — no valid targets.
                 pending = self._pending_event_target
                 pending_f = getattr(self, '_pending_event_faction', None)
@@ -931,16 +928,19 @@ class LegalActionsMixin:
                 self._pending_main = None
                 # Mark player ineligible and advance
                 player.eligible = False
-                if not self.keep_eligible_this_action:
+                if not getattr(self, "keep_eligible_this_action", False):
                     self.ineligible_next_card.add(self.current_player_num)
                 self.card_action_slot += 1
-                self.phase = PHASE_CHOOSE_MAIN
+                self.phase = 0
+                self._pending_sa = None
+                self._sa_free = False
+                self._sa_from_limited_ops = False
+                self._sa_restrict_op = None
+                self._sa_restrict_space = None
                 self.update_turn_pointer()
                 la = np.array(self.legal_actions, dtype=bool)
             else:
-                # Genuine all-zeros mask in a non-skip scenario — log for debugging
-                pending = getattr(self, '_pending_event_target', None)
                 print(f"WARNING: All-zeros mask! phase={self.phase}, player={player.name}, "
-                      f"eligible={player.eligible}, pending_event={pending}")
+                      f"eligible={player.eligible}")
                 break
         return la
