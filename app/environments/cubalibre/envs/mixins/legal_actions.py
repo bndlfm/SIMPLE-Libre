@@ -943,4 +943,8 @@ class LegalActionsMixin:
                 print(f"WARNING: All-zeros mask! phase={self.phase}, player={player.name}, "
                       f"eligible={player.eligible}")
                 break
+
+        if not la.any():
+            la[0] = True
+
         return la
