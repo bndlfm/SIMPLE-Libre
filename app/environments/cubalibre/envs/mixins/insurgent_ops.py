@@ -243,12 +243,40 @@ class InsurgentOpsMixin:
     def op_rally_m26(self, s): return self._op_rally_generic(s,2,3,4,1,0)
 
     def op_ambush_m26(self, s):
-        sp=self.board.spaces[s]; print(f"M26: AMBUSH {sp.name}"); k=0
-        for _ in range(2):
-            if sp.pieces[1]>0: sp.pieces[1]-=1; k+=1
-            elif sp.pieces[0]>0: sp.pieces[0]-=1; k+=1
-            elif sp.govt_bases>0: sp.govt_bases-=1; k+=1
-        print(f" -> Killed {k}"); return 1
+        sp = self.board.spaces[s]
+        print(f"M26: AMBUSH {sp.name}")
+
+        enemies = []
+        if sp.pieces[0] + sp.pieces[1] + sp.govt_bases > 0:
+            enemies.append(0)
+        if sp.pieces[5] + sp.pieces[6] + sp.pieces[7] > 0:
+            enemies.append(2)
+        if sp.pieces[8] + sp.pieces[9] + sp.pieces[10] > 0:
+            enemies.append(3)
+
+        if not enemies:
+            return 0
+
+        if len(enemies) == 1:
+            from app.environments.cubalibre.envs.constants import PHASE_CHOOSE_TARGET_PIECE
+            self._pending_event_target = {
+                "op": "AMBUSH_PIECE",
+                "space": s,
+                "ambushing_faction_id": 1,
+                "target_faction_id": enemies[0]
+            }
+            self.phase = PHASE_CHOOSE_TARGET_PIECE
+            return None
+        else:
+            from app.environments.cubalibre.envs.constants import PHASE_CHOOSE_TARGET_FACTION
+            self._pending_event_faction = {
+                "event": "AMBUSH_FACTION",
+                "space": s,
+                "ambushing_faction_id": 1,
+                "allowed": enemies
+            }
+            self.phase = PHASE_CHOOSE_TARGET_FACTION
+            return None
 
     def op_kidnap_m26(self, s, target_faction=None):
         sp = self.board.spaces[s]

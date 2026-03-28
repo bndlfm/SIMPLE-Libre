@@ -52,7 +52,7 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
         self._event_option_action_base = self._target_faction_action_base + self._target_faction_action_count
         self._event_option_action_count = 3
         self._target_piece_action_base = self._event_option_action_base + self._event_option_action_count
-        self._target_piece_action_count = 12  # 0-10 piece indices, 11 = remove cash
+        self._target_piece_action_count = 13  # 0-10 piece indices, 11 = govt base, 12 = remove cash/stop
         self.action_space = gym.spaces.Discrete(self._target_piece_action_base + self._target_piece_action_count)
         # Observation header fields (see observation() property)
         self._obs_header_size = 15  # Expanded to include next_card.id

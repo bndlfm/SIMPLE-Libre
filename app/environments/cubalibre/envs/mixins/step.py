@@ -615,7 +615,10 @@ class StepMixin:
                             advance_turn = False
                             cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
-                    elif op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
+                    elif op == OP_AMBUSH_M26:
+                        cost = self.op_ambush_m26(s)
+                        if cost is None:
+                            return self.observation, reward, done, False, {}
                     elif op == OP_KIDNAP_M26:
                         cost = self.op_kidnap_m26(s)
                         if cost is None:
@@ -2834,6 +2837,19 @@ class StepMixin:
                     advance_turn = False
                     return self.observation, reward, done, False, {}
 
+                elif event == "AMBUSH_FACTION":
+                    space_id = pending.get("space")
+                    ambushing_faction_id = pending.get("ambushing_faction_id")
+                    self._pending_event_target = {
+                        "op": "AMBUSH_PIECE",
+                        "space": space_id,
+                        "ambushing_faction_id": ambushing_faction_id,
+                        "target_faction_id": f
+                    }
+                    self.phase = PHASE_CHOOSE_TARGET_PIECE
+                    advance_turn = False
+                    self._pending_event_faction = None
+                    return self.observation, reward, done, False, {}
                 elif event == "ARMORED_CARS_UN_FACTION":
                     # f is selected faction index (1=M26, 2=DR)
                     self._pending_event_target = {
@@ -4009,6 +4025,43 @@ class StepMixin:
                 choice = action - self._target_piece_action_base
                 if not self._pending_cash_transfers:
                     pending_target = self._pending_event_target
+
+                    if pending_target is not None and pending_target.get("op") == "AMBUSH_PIECE":
+                        space_id = pending_target.get("space")
+                        sp = self.board.spaces[space_id]
+                        target_faction_id = pending_target.get("target_faction_id")
+                        ambushing_faction_id = pending_target.get("ambushing_faction_id")
+
+                        # Identify attacking underground guerrilla and flip to active
+                        u_idx = 2 if ambushing_faction_id == 1 else 5
+                        a_idx = 3 if ambushing_faction_id == 1 else 6
+                        if sp.pieces[u_idx] > 0:
+                            sp.pieces[u_idx] -= 1
+                            sp.pieces[a_idx] += 1
+
+                        if choice == 11: # Base
+                            if target_faction_id == 0: sp.govt_bases -= 1
+                        else:
+                            sp.pieces[choice] -= 1
+
+                        print(f" -> Ambush: Removed piece {choice} from faction {target_faction_id}")
+
+                        # Reward 1 Underground Guerrilla only if Govt Troop or Police was removed
+                        if target_faction_id == 0 and choice in [0, 1]:
+                            f_idx = 1 if ambushing_faction_id == 1 else 2 # 1=M26, 2=DR
+                            if self.players[f_idx].available_forces[0] > 0:
+                                self.board.add_piece(space_id, f_idx, 0)
+                                self.players[f_idx].available_forces[0] -= 1
+                                print(f" -> Ambush vs Govt: Placed 1 Underground Guerrilla for faction {f_idx}.")
+
+                        sp.update_control()
+
+                        self._pending_event_target = None
+                        self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                        self._pending_sa = True
+                        advance_turn = False
+                        return self.observation, reward, done, False, {}
+
                     if pending_target is None or pending_target.get("event") != "MEYER_LANSKY_UN":
                         raise Exception("Missing pending cash transfer in PHASE_CHOOSE_TARGET_PIECE")
 
@@ -4174,7 +4227,10 @@ class StepMixin:
                                 advance_turn = False
                                 cost = 0
                     elif player.name == "M26":
-                        if op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
+                        if op == OP_AMBUSH_M26:
+                            cost = self.op_ambush_m26(s)
+                            if cost is None:
+                                return self.observation, reward, done, False, {}
                         elif op == OP_KIDNAP_M26:
                             cost = self.op_kidnap_m26(s)
                             if cost is None:

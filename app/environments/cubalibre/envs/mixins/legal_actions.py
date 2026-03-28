@@ -599,8 +599,29 @@ class LegalActionsMixin:
                 mask[self._target_piece_action_base:self._target_piece_action_base + self._target_piece_action_count] = target_mask
                 return mask
 
-            # Meyer Lansky (Un): agent-driven cash holder-to-holder transfers within a space.
             pending_target = self._pending_event_target
+            if pending_target is not None and pending_target.get("op") == "AMBUSH_PIECE":
+                sp = self.board.spaces[pending_target.get("space")]
+                target_faction_id = pending_target.get("target_faction_id")
+                target_mask = np.zeros(self._target_piece_action_count)
+
+                if target_faction_id == 0:
+                    if sp.pieces[0] > 0: target_mask[0] = 1
+                    if sp.pieces[1] > 0: target_mask[1] = 1
+                    if sp.govt_bases > 0: target_mask[11] = 1 # Government Base
+                elif target_faction_id == 2:
+                    if sp.pieces[5] > 0: target_mask[5] = 1
+                    if sp.pieces[6] > 0: target_mask[6] = 1
+                    if sp.pieces[7] > 0: target_mask[7] = 1 # DR Base
+                elif target_faction_id == 3:
+                    if sp.pieces[8] > 0: target_mask[8] = 1
+                    if sp.pieces[9] > 0: target_mask[9] = 1
+                    if sp.pieces[10] > 0: target_mask[10] = 1 # Syn Base / Casino
+
+                mask[self._target_piece_action_base:self._target_piece_action_base + self._target_piece_action_count] = target_mask
+                return mask
+
+            # Meyer Lansky (Un): agent-driven cash holder-to-holder transfers within a space.
             if pending_target is not None and pending_target.get("event") == "MEYER_LANSKY_UN":
                 stage = pending_target.get("stage")
                 space_id = pending_target.get("space")
@@ -721,8 +742,12 @@ class LegalActionsMixin:
                         u,a = 2,3
                         cnt = s.pieces[u]+s.pieces[a]
                         has_govt = (s.pieces[0]+s.pieces[1]+s.govt_bases)>0
-                        # Ambush: Any space with M26 guerrillas and govt (no terrain restriction)
-                        if cnt>0 and has_govt:
+                        # Ambush: Any space with Underground M26 guerrillas and any enemy pieces (no terrain restriction)
+                        has_underground = s.pieces[u] > 0
+                        has_enemy = (s.pieces[0] + s.pieces[1] + s.govt_bases +
+                                     s.pieces[5] + s.pieces[6] + s.pieces[7] +
+                                     s.pieces[8] + s.pieces[9] + s.pieces[10]) > 0
+                        if has_underground and has_enemy:
                             sa_mask[OP_AMBUSH_M26*13+s_id]=1
                         # Kidnap: City/EC/Sierra Maestra (with capability) + M26 guerrillas > Police + open casino (or City/EC)
                         allow_loc = (s.type in [0,4])  # City or EC
