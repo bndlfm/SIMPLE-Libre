@@ -530,6 +530,8 @@ class StepMixin:
                         advance_turn = False
                 else:
                     cost = resolve_event(self, card_id, play_shaded)
+                    if cost is None:
+                        return self.observation, reward, done, False, {}
                     player.resources = max(0, player.resources - cost)
                     self._last_op_paid_cost = 0
 
@@ -599,12 +601,15 @@ class StepMixin:
                         cost = 0
                     elif op == OP_AIR_STRIKE: cost = self.op_airstrike(s)
                 elif player.name == "M26":
-                    if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
+                    if op == OP_RALLY_M26:
+                        cost = self.op_rally_m26(s)
+                        if cost is None:
+                             return self.observation, reward, done, False, {}
                     elif op == OP_MARCH_M26:
                         self._pending_event_target = None
                         self._pending_op_target = None
                         self._pending_sa_target = None
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -621,10 +626,13 @@ class StepMixin:
                         if cost is None:
                             return self.observation, reward, done, False, {}
                 elif player.name == "DR":
-                    if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
+                    if op == OP_RALLY_DR:
+                        cost = self.op_rally_dr(s)
+                        if cost is None:
+                             return self.observation, reward, done, False, {}
                     elif op == OP_MARCH_DR:
                         max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "max_range": max_range, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "max_range": max_range, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -637,9 +645,12 @@ class StepMixin:
                     elif op == OP_TERROR_DR: cost = self._op_terror_insurgent(s, 5, 6)
                     elif op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
                 elif player.name == "SYNDICATE":
-                    if op == OP_RALLY_SYN: cost = self.op_rally_syn(s)
+                    if op == OP_RALLY_SYN:
+                        cost = self.op_rally_syn(s)
+                        if cost is None:
+                             return self.observation, reward, done, False, {}
                     elif op == OP_MARCH_SYN:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -682,7 +693,7 @@ class StepMixin:
                         if op == OP_RALLY_M26:
                             self.op_rally_m26(s)
                         elif op == OP_MARCH_M26:
-                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "mafia": True, "faction": mafia_faction, "moved": 0, "borrowed_used": False}
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "mafia": True, "faction": mafia_faction, "moved": 0, "borrowed_used": False, "march_groups": {}, "first_group_key": None}
                             self.phase = PHASE_CHOOSE_TARGET_SPACE
                             advance_turn = False
                             return self.observation, reward, done, False, {}
@@ -695,7 +706,7 @@ class StepMixin:
                             self.op_rally_dr(s)
                         elif op == OP_MARCH_DR:
                             max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
-                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "mafia": True, "faction": mafia_faction, "max_range": max_range, "moved": 0, "borrowed_used": False}
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "mafia": True, "faction": mafia_faction, "max_range": max_range, "moved": 0, "borrowed_used": False, "march_groups": {}, "first_group_key": None}
                             self.phase = PHASE_CHOOSE_TARGET_SPACE
                             advance_turn = False
                             return self.observation, reward, done, False, {}
@@ -749,9 +760,12 @@ class StepMixin:
                         advance_turn = False
                         cost = 0
                 elif player.name == "M26":
-                    if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
+                    if op == OP_RALLY_M26:
+                        cost = self.op_rally_m26(s)
+                        if cost is None:
+                             return self.observation, reward, done, False, {}
                     elif op == OP_MARCH_M26:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -763,10 +777,13 @@ class StepMixin:
                             cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
                 elif player.name == "DR":
-                    if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
+                    if op == OP_RALLY_DR:
+                        cost = self.op_rally_dr(s)
+                        if cost is None:
+                             return self.observation, reward, done, False, {}
                     elif op == OP_MARCH_DR:
                         max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "max_range": max_range, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "max_range": max_range, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -780,7 +797,7 @@ class StepMixin:
                 elif player.name == "SYNDICATE":
                     if op == OP_RALLY_SYN: cost = self.op_rally_syn(s)
                     elif op == OP_MARCH_SYN:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "limited": True, "moved": 0}
+                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "limited": True, "moved": 0, "march_groups": {}, "first_group_key": None}
                         self.phase = PHASE_CHOOSE_TARGET_SPACE
                         advance_turn = False
                         cost = 0
@@ -1162,7 +1179,7 @@ class StepMixin:
                         moved = self._march_move_piece(src, dest, piece_map[choices[0]])
                         if moved:
                             pending_op["moved"] = int(pending_op.get("moved", 0)) + 1
-                            if pending_op.get("mafia") and piece_map[choices[0]] in [8, 9]:
+                            if pending_op.get("mafia") and int(piece_map[choices[0]]) in [8, 9]:
                                 pending_op["borrowed_used"] = True
 
                         if not self._march_source_ids(pending_op):
@@ -2721,6 +2738,9 @@ class StepMixin:
                     s = pending["space"]
                     cost = self.op_kidnap_m26(s, target_faction=f)
                     self._pending_event_faction = None
+                    if cost is None:
+                         return self.observation, reward, done, False, {}
+
                     if not self._sa_free:
                          player.resources = max(0, player.resources - cost)
                     self._last_op_paid_cost = int(cost)
@@ -3234,6 +3254,80 @@ class StepMixin:
                 if opt not in allowed:
                     raise Exception("Selected disallowed option in PHASE_CHOOSE_EVENT_OPTION")
 
+                if event == "OP_GARRISON_ASSAULT":
+                    # opt: 0=Skip, 1=Execute
+                    targets = pending.get("targets", [])
+                    is_limited = pending.get("is_limited")
+                    self._pending_event_option = None
+                    if opt == 1:
+                        if len(targets) == 1:
+                            self._op_assault_impl(targets[0], context="SA")
+                        else:
+                             # Pick first available target for simplicity
+                             self._op_assault_impl(targets[0], context="SA")
+
+                    if is_limited:
+                        player.eligible = False
+                        self.ineligible_next_card.add(self.current_player_num)
+                        self.card_action_slot += 1
+                        self.phase = PHASE_CHOOSE_MAIN
+                        self._pending_main = None
+                        advance_turn = True
+                        return self.observation, reward, done, False, {}
+
+                    self._pending_sa = True
+                    self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                    advance_turn = False
+                    return self.observation, reward, done, False, {}
+
+                if event == "OP_TRAIN_CIVIC":
+                    # opt: 0=Skip, 1=Execute
+                    s = int(pending["space"])
+                    self._pending_event_option = None
+                    if opt == 1:
+                        sp = self.board.spaces[s]
+                        if sp.terror > 0:
+                            sp.terror -= 1
+                        else:
+                            self._shift_toward_active_support(sp)
+                        player.resources -= 4
+
+                    # Complete Train
+                    cost = self.get_govt_cost()
+                    if not self._launder_free:
+                        player.resources = max(0, player.resources - cost)
+                    self._last_op_paid_cost = int(cost)
+
+                    self._pending_sa = True
+                    self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                    advance_turn = False
+                    return self.observation, reward, done, False, {}
+
+                if event == "OP_RALLY_CHOICE":
+                    # opt: 0=Place, 1=Flip
+                    s = int(pending["space"])
+                    u, a, b = int(pending["u"]), int(pending["a"]), int(pending["b"])
+                    f, sup = int(pending["f"]), int(pending["sup"])
+
+                    self._pending_event_option = None
+                    if opt == 0:
+                        cost = self._op_rally_generic(s, u, a, b, f, sup, ignore_choice=True)
+                    else:
+                        cost = self._op_rally_generic(s, u, a, b, f, sup, force_flip=True, ignore_choice=True)
+
+                    if cost is None:
+                         # Should not happen as we passed all info, but just in case
+                         return self.observation, reward, done, False, {}
+
+                    if not self._launder_free:
+                        player.resources = max(0, player.resources - cost)
+                    self._last_op_paid_cost = int(cost)
+
+                    self._pending_sa = True
+                    self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                    advance_turn = False
+                    return self.observation, reward, done, False, {}
+
                 if event == "OP_ATTACK":
                     # Resume Attack with selected target_type
                     # opt: 0=Troops, 1=Police, 2=Base
@@ -3546,6 +3640,22 @@ class StepMixin:
                     self.phase = PHASE_CHOOSE_TARGET_SPACE
                     advance_turn = False
                     return self.observation, reward, done, False, {}
+                elif event == "FANGIO_UN":
+                    self._pending_event_option = None
+                    sp = self.board.spaces[int(pending.get("space"))]
+                    # opt: 0=Shift 1, 1=Shift 2
+                    for _ in range(opt + 1):
+                        self._shift_toward_active_opposition(sp)
+                    sp.update_control()
+
+                    player.eligible = False
+                    if not self.keep_eligible_this_action:
+                        self.ineligible_next_card.add(self.current_player_num)
+                    self.card_action_slot += 1
+                    self.phase = PHASE_CHOOSE_MAIN
+                    self._pending_main = None
+                    return self.observation, reward, done, False, {}
+
                 elif event == "SWEEP_PIECE":
                     self._pending_event_option = None
                     pending_op = self._pending_op_target
@@ -4180,12 +4290,17 @@ class StepMixin:
                             if cost is None:
                                 return self.observation, reward, done, False, {}
                     elif player.name == "DR":
-                        if op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
+                        if op == OP_ASSASSINATE_DR:
+                            cost = self.op_assassinate_dr(s)
+                            if cost is None:
+                                return self.observation, reward, done, False, {}
                     elif player.name == "SYNDICATE":
                         if op == OP_BRIBE_SYN: cost = self.op_bribe_syn(s)
                         elif op == OP_CONSTRUCT_SYN: cost = self.op_construct_syn(s)
                         elif op == OP_ASSASSINATE_DR and "Hitmen_Shaded" in self.capabilities:
                             cost = self.op_assassinate_hitmen(s)
+                            if cost is None:
+                                return self.observation, reward, done, False, {}
 
                     if not self._sa_free:
                         # Special Activities usually don't have resource costs except Bribe, but cost is returned.

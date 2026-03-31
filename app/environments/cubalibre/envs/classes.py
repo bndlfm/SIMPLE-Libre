@@ -250,7 +250,7 @@ class Board():
         if self.spaces[space_id].pieces[idx] > 0:
              self.spaces[space_id].pieces[idx] -= 1
              sp = self.spaces[space_id]
-             if piece_type == 2 and faction_idx in [1, 2]:
+             if int(piece_type) == 2 and int(faction_idx) in [1, 2]:
                  env = getattr(self, "env", None)
                  if env is not None:
                      env._record_pact_base_removal(int(faction_idx))

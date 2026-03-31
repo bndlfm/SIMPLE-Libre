@@ -20,7 +20,12 @@ class LegalActionsMixin:
             mask[self._main_action_base + MAIN_PASS] = 1
             if self.card_action_slot == 0:
                 mask[self._main_action_base + MAIN_EVENT] = 1
-                mask[self._main_action_base + MAIN_OPS] = 1
+                # Rule 2.3.9: Final Event Card restricted to Limited Ops.
+                is_final_event_card = (self.propaganda_cards_played == 3 and self.next_card and self.next_card.is_propaganda)
+                if not is_final_event_card:
+                    mask[self._main_action_base + MAIN_OPS] = 1
+                else:
+                    mask[self._limited_main_action_id] = 1
             else:
                 first_action = self.card_first_action
                 if first_action == "EVENT":
@@ -542,6 +547,11 @@ class LegalActionsMixin:
                     a = pending_op.get("a")
                     if dest is None or u is None or a is None:
                         continue
+
+                    # Prevent moving back from destination
+                    if s_id == dest:
+                        continue
+
                     if s_id in self._march_source_ids(pending_op):
                         target_mask[s_id] = 1
                 elif op_kind == "SWEEP_SRC":
@@ -646,11 +656,16 @@ class LegalActionsMixin:
                             if gp>=2 and player.available_bases>0 and s.govt_bases<(2 if is_city else 1): ops_mask[OP_TRAIN_BASE*13+s_id]=1
                         if any(self.board.spaces[i].pieces[1]>0 for i in s.adj_ids): ops_mask[OP_GARRISON*13+s_id]=1
 
+                        # Rule 3.2.3: Adjacent Troops (or Police if SIM Shaded)
                         has_adj_troops = any(self.board.spaces[i].pieces[0]>0 for i in s.adj_ids)
+                        if "SIM_Shaded" in self.capabilities:
+                            has_adj_troops = has_adj_troops or any(self.board.spaces[i].pieces[1]>0 for i in s.adj_ids)
+
                         if gp>0 or has_adj_troops: ops_mask[OP_SWEEP*13+s_id]=1
 
                         # Assault
                         enemies = sum(s.pieces[2:11])
+                        # Rule 3.2.4: Assault requires Govt cubes. (Note: Police hit any if City/EC or SIM Shaded)
                         can_assault = (gp > 0 and enemies > 0)
                         if can_assault:
                             ops_mask[OP_ASSAULT*13+s_id]=1
@@ -674,7 +689,20 @@ class LegalActionsMixin:
                     s = self.board.spaces[s_id]; cnt = s.pieces[u]+s.pieces[a]
                     has_govt = (s.pieces[0]+s.pieces[1]+s.govt_bases)>0
                     if can_afford:
-                        ops_mask[base*13+s_id]=1
+                        # Rally restrictions (Rule 3.3.1)
+                        if player.name == "M26":
+                            if s.alignment == 1: # Support
+                                pass
+                            else:
+                                ops_mask[base*13+s_id]=1
+                        elif player.name == "DR":
+                            if s.support_active and s.alignment != 0: # Active Support or Active Opposition
+                                pass
+                            else:
+                                ops_mask[base*13+s_id]=1
+                        else:
+                            ops_mask[base*13+s_id]=1
+
                         if player.name == "DR" and "Morgan_Unshaded" in self.capabilities:
                             if self._has_guerrillas_within_range(s_id, u, a, 2):
                                 ops_mask[(base+1)*13+s_id]=1
@@ -687,6 +715,12 @@ class LegalActionsMixin:
                                 pass
                             else:
                                 ops_mask[(base+3)*13+s_id]=1
+
+                        # Rule 3.3.5: Construct (Syndicate only)
+                        if player.name == "SYNDICATE" and player.available_bases > 0:
+                            # Govt or Syndicate control, City or Province
+                            if s.type in [0, 1, 2, 3] and s.controlled_by in [1, 4]:
+                                ops_mask[OP_CONSTRUCT_SYN * 13 + s_id] = 1
 
             # Event/Pass are not part of the Ops-phase menu.
             # Note: Pass is handled in PHASE_CHOOSE_MAIN.
@@ -851,12 +885,27 @@ class LegalActionsMixin:
                     s = self.board.spaces[s_id]; cnt = s.pieces[u]+s.pieces[a]
                     has_govt = (s.pieces[0]+s.pieces[1]+s.govt_bases)>0
                     if can_afford:
-                        ops_mask[base*13+s_id]=1
+                        # Rally restrictions (Rule 3.3.1)
+                        if player.name == "M26":
+                            if s.alignment == 1: # Support
+                                pass
+                            else:
+                                ops_mask[base*13+s_id]=1
+                        elif player.name == "DR":
+                            if s.support_active and s.alignment != 0: # Active Support or Active Opposition
+                                pass
+                            else:
+                                ops_mask[base*13+s_id]=1
+                        else:
+                            ops_mask[base*13+s_id]=1
+
                         if player.name == "DR" and "Morgan_Unshaded" in self.capabilities:
                             if self._has_guerrillas_within_range(s_id, u, a, 2):
                                 ops_mask[(base+1)*13+s_id]=1
                         elif any((self.board.spaces[i].pieces[u]+self.board.spaces[i].pieces[a])>0 for i in s.adj_ids):
                             ops_mask[(base+1)*13+s_id]=1
+
+                        # Rule 3.3.3: Attack requires friendly Guerrillas and Govt pieces.
                         if cnt>0 and has_govt: ops_mask[(base+2)*13+s_id]=1
                         if s.pieces[u]>0:
                             if self._pact_blocks_opposition(self.current_player_num):
@@ -867,8 +916,10 @@ class LegalActionsMixin:
                         # Construct is a Syndicate Operation and is allowed as a paid Limited Operation,
                         # but is never free (2.3.6 / 3.3.5). So forbid it when Launder grants a free LimOp.
                         if player.name == "SYNDICATE" and not self._launder_free:
-                            if cnt > 0 and player.available_bases > 0:
-                                ops_mask[OP_CONSTRUCT_SYN * 13 + s_id] = 1
+                            if player.available_bases > 0:
+                                # Govt or Syndicate control, City or Province
+                                if s.type in [0, 1, 2, 3] and s.controlled_by in [1, 4]:
+                                    ops_mask[OP_CONSTRUCT_SYN * 13 + s_id] = 1
 
                         # No special activities in Limited Ops
 

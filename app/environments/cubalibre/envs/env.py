@@ -630,10 +630,13 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
             self._move_pieces_with_cash(sp.id, police_dest, 0, 1, mv)
 
         # 6.4.2 Troops: move Troops on ECs or in Provinces without Govt Bases.
+        # Rule 6.4.2: "must move any Troops on ECs or in Provinces without Government Bases to Govt-Controlled spaces
+        # that either are Cities or have Government Bases (if no such spaces, then to Havana City)."
         troop_dests = [sp.id for sp in self.board.spaces if sp.controlled_by == 1 and (sp.type == 0 or sp.govt_bases > 0)]
         if not troop_dests:
-            troop_dests = [3]
-        troop_dest = troop_dests[0]
+            troop_dest = 3 # Havana City
+        else:
+            troop_dest = troop_dests[0]
 
         for sp in self.board.spaces:
             is_province = sp.type in [1, 2, 3]
@@ -686,42 +689,81 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
             faction_idx = 3
         else:
             return False
+
+        if 'march_groups' not in self._pending_op_target:
+            self._pending_op_target['march_groups'] = {}
+
+        group_key = f"{src}_{dest}"
+        group = self._pending_op_target['march_groups'].setdefault(group_key, {'u_moved': 0, 'a_moved': 0, 'total': 0})
+        print(f"DEBUG: March group {group_key} before move: {group}")
+
+        if self._pending_op_target.get('first_group_key') is None:
+            self._pending_op_target['first_group_key'] = group_key
+
         piece_type = 0 if piece_idx in [2, 5, 8] else 1
         moved = self._move_pieces_with_cash(src, dest, faction_idx, piece_type, 1) > 0
         
-        # El Che capability: First M26 March group flips underground
-        if moved and piece_type == 0 and faction_idx == 1:
-            if "ElChe_Unshaded" in self.capabilities and self._pending_op_target.get("moved", 0) == 0:
-                # First group stays underground (capability effect)
-                pass
-            else:
-                # Normal: flip to Active in City/EC
-                sp_dest = self.board.spaces[int(dest)]
-                if sp_dest.type in [0, 4]:
-                    sp_dest.pieces[piece_idx] -= 1
-                    sp_dest.pieces[piece_idx + 1] += 1
-                    self._move_cash_between_piece_indices(sp_dest, piece_idx, piece_idx + 1, 1)
-                    sp_dest.update_control()
-        elif moved and piece_type == 0:
-            # Non-M26: normal activation
+        if moved:
+            group['total'] += 1
+            if piece_type == 0: group['u_moved'] += 1
+            else: group['a_moved'] += 1
+            print(f"DEBUG: March group {group_key} after move: {group}")
+
             sp_dest = self.board.spaces[int(dest)]
-            if sp_dest.type in [0, 4]:
-                sp_dest.pieces[piece_idx] -= 1
-                sp_dest.pieces[piece_idx + 1] += 1
-                self._move_cash_between_piece_indices(sp_dest, piece_idx, piece_idx + 1, 1)
-                sp_dest.update_control()
+            u_idx = 2 if faction_idx == 1 else (5 if faction_idx == 2 else 8)
+            a_idx = u_idx + 1
+
+            # Condition for activation: (Group + Cubes > 3) AND (City, EC, or Province with Support)
+            num_cubes = int(sp_dest.pieces[0] + sp_dest.pieces[1])
+            is_city_or_ec = (sp_dest.type == 0 or sp_dest.type == 4)
+            is_prov_with_support = (sp_dest.type in [1, 2, 3] and sp_dest.alignment == 1)
+            # Rule 3.3.2: Activate if (Group + Cubes > 3) AND (City, EC, or Province with Support)
+            should_activate = (group['total'] + num_cubes > 3) and (is_city_or_ec or is_prov_with_support)
+            print(f"DEBUG: should_activate={should_activate} total={group['total']} cubes={num_cubes}")
+
+            # El Che Capability (Unshaded): 1st group flips Underground (overrides activation)
+            is_el_che = ("ElChe_Unshaded" in self.capabilities and self.current_player_num == 1)
+            is_first_group = (self._pending_op_target['first_group_key'] == group_key)
+
+            if is_el_che and is_first_group:
+                # El Che: Current piece should be Underground. If it moved as Active or should activate, flip/keep it Underground.
+                if sp_dest.pieces[a_idx] > 0 and (piece_type == 1 or should_activate):
+                    sp_dest.pieces[a_idx] -= 1
+                    sp_dest.pieces[u_idx] += 1
+                    self._move_cash_between_piece_indices(sp_dest, a_idx, u_idx, 1)
+                    # Adjust group tracking as this piece is now Underground
+                    if piece_type == 1:
+                        group['a_moved'] -= 1
+                        group['u_moved'] += 1
+            elif should_activate:
+                # Normal activation: flip all u_moved in this group to active
+                to_flip = group['u_moved']
+                if to_flip > 0:
+                    sp_dest.pieces[u_idx] -= to_flip
+                    sp_dest.pieces[a_idx] += to_flip
+                    self._move_cash_between_piece_indices(sp_dest, u_idx, a_idx, to_flip)
+                    group['u_moved'] = 0
+                    group['a_moved'] += to_flip
+
+            sp_dest.update_control()
+
         return moved
 
     def _finish_march(self, player, pending_op):
         moved = int(pending_op.get("moved", 0))
-        if not pending_op.get("mafia") and moved > 0:
+        is_free = pending_op.get("mafia") or getattr(self, "_launder_free", False)
+        if not is_free and moved > 0:
             dest = pending_op.get("dest")
             if dest is not None and self.board.spaces[int(dest)].type == 4:
                 cost = 0
             else:
+                # Rule 3.3.2: Pay 1 Resource per final destination City or Province (0 for ECs).
+                # Model currently pays 1 per destination space picked.
                 cost = 1
             player.resources = max(0, player.resources - cost)
             self._last_op_paid_cost = int(cost)
+        else:
+            self._last_op_paid_cost = 0
 
         self._pending_op_target = None
         if pending_op.get("mafia"):
@@ -768,13 +810,19 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
         sp = self.board.spaces[int(dest)]
         rev = 0
         cubes = int(sp.pieces[0] + sp.pieces[1])
-        for idx in [2, 5, 8]:
+
+        # Rule 3.2.3: In Forest (1), Activate only 1 Guerrilla for every 2 cubes.
+        budget = (cubes // 2) if sp.type == 1 else cubes
+
+        # Rule 4.2.2: Govt cannot target Syndicate
+        for idx in [2, 5]:
             h = int(sp.pieces[idx])
-            tr = h if sp.type in [0, 2, 4] else min(h, cubes)
+            tr = min(h, budget)
             if tr > 0:
                 sp.pieces[idx] -= tr
                 sp.pieces[idx + 1] += tr
                 rev += tr
+                budget -= tr
                 self._move_cash_between_piece_indices(sp, idx, idx + 1, tr)
         print(f" -> Revealed {rev}")
         sp.update_control()
@@ -808,6 +856,25 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
         self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
 
     def _finish_garrison(self, player, pending_op):
+        dest = pending_op.get("dest")
+        if dest is not None:
+            sp = self.board.spaces[int(dest)]
+            # Rule 3.2.2: Activate 1 Guerrilla for each cube in EC.
+            if sp.type == 4:
+                cubes = int(sp.pieces[0] + sp.pieces[1])
+                rev = 0
+                budget = cubes
+                for idx in [2, 5]: # No syndicate targeting
+                    h = int(sp.pieces[idx])
+                    tr = min(h, budget)
+                    if tr > 0:
+                        sp.pieces[idx] -= tr
+                        sp.pieces[idx + 1] += tr
+                        rev += tr
+                        budget -= tr
+                        self._move_cash_between_piece_indices(sp, idx, idx + 1, tr)
+                print(f" -> Garrison Activated {rev}")
+
         player.resources = max(0, int(player.resources) - self.get_govt_cost())
         self._last_op_paid_cost = int(self.get_govt_cost())
         self._pending_op_target = None
