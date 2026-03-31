@@ -560,19 +560,25 @@ class StepMixin:
                     if op == OP_TRAIN_FORCE: cost = self._op_train_f_impl(s)
                     elif op == OP_TRAIN_BASE: cost = self._op_train_b_impl(s)
                     elif op == OP_GARRISON:
-                        self._pending_op_target = {"op": "GARRISON_SRC", "dest": s, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "GARRISON_SRC", "dest": s, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_garrison_impl(s)
                     elif op == OP_SWEEP:
-                        self._pending_event_target = None
-                        self._pending_op_target = None
-                        self._pending_sa_target = None
-                        allow_police = "SIM_Shaded" in self.capabilities
-                        self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_event_target = None
+                            self._pending_op_target = None
+                            self._pending_sa_target = None
+                            allow_police = "SIM_Shaded" in self.capabilities
+                            self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_sweep_impl(s)
                     elif op == OP_ASSAULT:
                         if "ArmoredCars_Shaded" in self.capabilities:
                             self._pending_event_target = None
@@ -589,25 +595,31 @@ class StepMixin:
                                 advance_turn = False
                                 cost = 0
                     elif op == OP_TRANSPORT:
-                        # Agent selects a source space for Transport.
-                        self._pending_event_target = None
-                        self._pending_op_target = None
-                        self._pending_sa_target = None
-                        self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            # Agent selects a source space for Transport.
+                            self._pending_event_target = None
+                            self._pending_op_target = None
+                            self._pending_sa_target = None
+                            self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self.op_transport(s)
                     elif op == OP_AIR_STRIKE: cost = self.op_airstrike(s)
                 elif player.name == "M26":
                     if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
                     elif op == OP_MARCH_M26:
-                        self._pending_event_target = None
-                        self._pending_op_target = None
-                        self._pending_sa_target = None
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_event_target = None
+                            self._pending_op_target = None
+                            self._pending_sa_target = None
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 2, 3)
                     elif op == OP_ATTACK_M26:
                         cost = self._op_attack_insurgent(s, 2, 3, 4)
                         if cost is None:
@@ -615,7 +627,12 @@ class StepMixin:
                             advance_turn = False
                             cost = 0
                     elif op == OP_TERROR_M26: cost = self._op_terror_insurgent(s, 2, 3)
-                    elif op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
+                    elif op == OP_AMBUSH_M26:
+                        cost = self.op_ambush_m26(s)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_TARGET_FACTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_KIDNAP_M26:
                         cost = self.op_kidnap_m26(s)
                         if cost is None:
@@ -623,11 +640,14 @@ class StepMixin:
                 elif player.name == "DR":
                     if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
                     elif op == OP_MARCH_DR:
-                        max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "max_range": max_range, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "max_range": max_range, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 5, 6)
                     elif op == OP_ATTACK_DR:
                         cost = self._op_attack_insurgent(s, 5, 6, 7)
                         if cost is None:
@@ -635,14 +655,22 @@ class StepMixin:
                             advance_turn = False
                             cost = 0
                     elif op == OP_TERROR_DR: cost = self._op_terror_insurgent(s, 5, 6)
-                    elif op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
+                    elif op == OP_ASSASSINATE_DR:
+                        cost = self.op_assassinate_dr(s)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_TARGET_FACTION
+                            advance_turn = False
+                            cost = 0
                 elif player.name == "SYNDICATE":
                     if op == OP_RALLY_SYN: cost = self.op_rally_syn(s)
                     elif op == OP_MARCH_SYN:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 8, 9)
                     elif op == OP_ATTACK_SYN:
                         cost = self._op_attack_insurgent(s, 8, 9, 10)
                         if cost is None:
@@ -650,7 +678,12 @@ class StepMixin:
                             advance_turn = False
                             cost = 0
                     elif op == OP_TERROR_SYN: cost = self._op_terror_insurgent(s, 8, 9)
-                    elif op == OP_BRIBE_SYN: cost = self.op_bribe_syn(s)
+                    elif op == OP_BRIBE_SYN:
+                        cost = self.op_bribe_syn(s)
+                        if cost is None:
+                            self.phase = PHASE_CHOOSE_TARGET_FACTION
+                            advance_turn = False
+                            cost = 0
                     elif op == OP_CONSTRUCT_SYN: cost = self.op_construct_syn(s)
 
                 player.resources = max(0, player.resources - cost)
@@ -721,16 +754,22 @@ class StepMixin:
                     if op == OP_TRAIN_FORCE: cost = self._op_train_f_impl(s)
                     elif op == OP_TRAIN_BASE: cost = self._op_train_b_impl(s)
                     elif op == OP_GARRISON:
-                        self._pending_op_target = {"op": "GARRISON_SRC", "dest": s, "moved": 0, "limited": True}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "GARRISON_SRC", "dest": s, "moved": 0, "limited": True}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_garrison_impl(s)
                     elif op == OP_SWEEP:
-                        allow_police = "SIM_Shaded" in self.capabilities
-                        self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0, "limited": True}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            allow_police = "SIM_Shaded" in self.capabilities
+                            self._pending_op_target = {"op": "SWEEP_SRC", "dest": s, "allow_police": allow_police, "moved": 0, "limited": True}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_sweep_impl(s)
                     elif op == OP_ASSAULT:
                         if "ArmoredCars_Shaded" in self.capabilities:
                             self._pending_op_target = {"op": "ASSAULT_REINFORCE_SRC", "dest": s, "limited": True, "context": "OP"}
@@ -744,17 +783,23 @@ class StepMixin:
                                 advance_turn = False
                                 cost = 0
                     elif op == OP_TRANSPORT:
-                        self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s, "limited": True}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "TRANSPORT_SRC", "dest": s, "limited": True}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self.op_transport(s)
                 elif player.name == "M26":
                     if op == OP_RALLY_M26: cost = self.op_rally_m26(s)
                     elif op == OP_MARCH_M26:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 2, "a": 3, "limited": True, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 2, 3)
                     elif op == OP_ATTACK_M26:
                         cost = self._op_attack_insurgent(s, 2, 3, 4)
                         if cost is None:
@@ -765,11 +810,14 @@ class StepMixin:
                 elif player.name == "DR":
                     if op == OP_RALLY_DR: cost = self.op_rally_dr(s)
                     elif op == OP_MARCH_DR:
-                        max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "max_range": max_range, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            max_range = 2 if "Morgan_Unshaded" in self.capabilities else 1
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 5, "a": 6, "limited": True, "max_range": max_range, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 5, 6)
                     elif op == OP_ATTACK_DR:
                         cost = self._op_attack_insurgent(s, 5, 6, 7)
                         if cost is None:
@@ -780,10 +828,13 @@ class StepMixin:
                 elif player.name == "SYNDICATE":
                     if op == OP_RALLY_SYN: cost = self.op_rally_syn(s)
                     elif op == OP_MARCH_SYN:
-                        self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "limited": True, "moved": 0}
-                        self.phase = PHASE_CHOOSE_TARGET_SPACE
-                        advance_turn = False
-                        cost = 0
+                        if self.manual:
+                            self._pending_op_target = {"op": "MARCH_SRC", "dest": s, "u": 8, "a": 9, "limited": True, "moved": 0}
+                            self.phase = PHASE_CHOOSE_TARGET_SPACE
+                            advance_turn = False
+                            cost = 0
+                        else:
+                            cost = self._op_march_insurgent(s, 8, 9)
                     elif op == OP_ATTACK_SYN:
                         cost = self._op_attack_insurgent(s, 8, 9, 10)
                         if cost is None:
@@ -2698,23 +2749,52 @@ class StepMixin:
                     a = int(pending["a"])
                     b = int(pending["b"])
                     removals = int(pending["removals_left"])
+                    orig_event = pending.get("orig_event")
 
-                    cost = self._op_attack_insurgent(s, u, a, b, target_type=None, removals_left=removals, skip_roll=True, target_faction=f)
+                    if orig_event == "OP_AMBUSH_M26":
+                         cost = self.op_ambush_m26(s, removals_left=removals, target_faction=f)
+                    elif orig_event == "OP_AMBUSH_DR":
+                         cost = self.op_ambush_dr(s, removals_left=removals, target_faction=f)
+                    elif orig_event == "OP_ASSASSINATE_DR":
+                         cost = self.op_assassinate_dr(s, target_faction=f)
+                    elif orig_event == "OP_ASSASSINATE_HITMEN":
+                         cost = self.op_assassinate_hitmen(s, target_faction=f)
+                    elif orig_event == "OP_BRIBE_SYN":
+                         cost = self.op_bribe_syn(s, target_faction=f)
+                    else:
+                         cost = self._op_attack_insurgent(s, u, a, b, target_type=None, removals_left=removals, skip_roll=True, target_faction=f)
 
                     if cost is None:
-                        return self.observation, reward, done, False, {}
+                        # After selecting faction, if we immediately need to select piece type (Phase 7),
+                        # the _op_attack_insurgent will have set self.phase = 7.
+                        # Important: return current player reward, NOT always index 0.
+                        return self.observation, float(reward[self.current_player_num]), done, False, {}
 
                     self._pending_event_faction = None
-                    if not self._launder_free:
+                    if not self._launder_free and not self._sa_free:
                         player.resources = max(0, player.resources - cost)
                         self._last_op_paid_cost = int(cost)
                     else:
                         self._last_op_paid_cost = 0
 
-                    if self.phase not in [5, 6, 7]:
-                         self._pending_sa = True
-                         self.phase = 4 # PHASE_CHOOSE_SPECIAL_ACTIVITY
-                         advance_turn = False
+                    if self.phase not in [PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION, PHASE_CHOOSE_EVENT_OPTION]:
+                         if orig_event in ["OP_AMBUSH_M26", "OP_AMBUSH_DR", "OP_ASSASSINATE_DR", "OP_ASSASSINATE_HITMEN", "OP_BRIBE_SYN"]:
+                              # Special activity finished. End turn.
+                              player.eligible = False
+                              if not self.keep_eligible_this_action:
+                                  self.ineligible_next_card.add(self.current_player_num)
+                              self.card_action_slot += 1
+                              self.phase = PHASE_CHOOSE_MAIN
+                              self._pending_main = None
+                              if not done and not self._cash_transfer_waiting:
+                                   self.update_turn_pointer()
+                              return self.observation, reward, done, False, {}
+                         else:
+                              # Operation finished. Move to Special Activity phase.
+                              self._pending_sa = True
+                              self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                              advance_turn = False
+                              return self.observation, reward, done, False, {}
                     return self.observation, reward, done, False, {}
 
                 if event == "OP_KIDNAP":
@@ -3243,8 +3323,20 @@ class StepMixin:
                     b = int(pending["b"])
                     removals = int(pending["removals_left"])
                     target_faction = int(pending["target_faction"])
+                    orig_event = pending.get("orig_event")
 
-                    cost = self._op_attack_insurgent(s, u, a, b, target_type=opt, removals_left=removals, skip_roll=True, target_faction=target_faction)
+                    if orig_event == "OP_AMBUSH_M26":
+                         cost = self.op_ambush_m26(s, target_type=opt, removals_left=removals, target_faction=target_faction)
+                    elif orig_event == "OP_AMBUSH_DR":
+                         cost = self.op_ambush_dr(s, target_type=opt, removals_left=removals, target_faction=target_faction)
+                    elif orig_event == "OP_ASSASSINATE_DR":
+                         cost = self.op_assassinate_dr(s, target_type=opt, target_faction=target_faction)
+                    elif orig_event == "OP_ASSASSINATE_HITMEN":
+                         cost = self.op_assassinate_hitmen(s, target_type=opt, target_faction=target_faction)
+                    elif orig_event == "OP_BRIBE_SYN":
+                         cost = self.op_bribe_syn(s, target_type=opt, target_faction=target_faction)
+                    else:
+                         cost = self._op_attack_insurgent(s, u, a, b, target_type=opt, removals_left=removals, skip_roll=True, target_faction=target_faction)
 
                     if cost is None:
                         # Still paused (e.g. 2nd removal needs selection)
@@ -3254,16 +3346,30 @@ class StepMixin:
 
                     # Finished
                     self._pending_event_option = None
-                    if not self._launder_free:
+                    if not self._launder_free and not self._sa_free:
                         player.resources = max(0, player.resources - cost)
                         self._last_op_paid_cost = int(cost)
                     else:
                         self._last_op_paid_cost = 0
 
-                    if self.phase not in [PHASE_CHOOSE_TARGET_SPACE, PHASE_CHOOSE_TARGET_FACTION]:
-                         self._pending_sa = True
-                         self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
-                         advance_turn = False
+                    if self.phase == PHASE_CHOOSE_EVENT_OPTION:
+                         if orig_event in ["OP_AMBUSH_M26", "OP_ASSASSINATE_DR", "OP_ASSASSINATE_HITMEN", "OP_BRIBE_SYN"]:
+                              # Special activity finished. End turn.
+                              player.eligible = False
+                              if not self.keep_eligible_this_action:
+                                  self.ineligible_next_card.add(self.current_player_num)
+                              self.card_action_slot += 1
+                              self.phase = PHASE_CHOOSE_MAIN
+                              self._pending_main = None
+                              if not done and not self._cash_transfer_waiting:
+                                   self.update_turn_pointer()
+                              return self.observation, reward, done, False, {}
+                         else:
+                              # Operation finished. Move to Special Activity phase.
+                              self._pending_sa = True
+                              self.phase = PHASE_CHOOSE_SPECIAL_ACTIVITY
+                              advance_turn = False
+                              return self.observation, reward, done, False, {}
                     return self.observation, reward, done, False, {}
 
                 if event == "FAT_BUTCHER_UN":
@@ -4174,18 +4280,43 @@ class StepMixin:
                                 advance_turn = False
                                 cost = 0
                     elif player.name == "M26":
-                        if op == OP_AMBUSH_M26: cost = self.op_ambush_m26(s)
+                        if op == OP_AMBUSH_M26:
+                            cost = self.op_ambush_m26(s)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                         elif op == OP_KIDNAP_M26:
                             cost = self.op_kidnap_m26(s)
                             if cost is None:
                                 return self.observation, reward, done, False, {}
                     elif player.name == "DR":
-                        if op == OP_ASSASSINATE_DR: cost = self.op_assassinate_dr(s)
+                        if op == OP_AMBUSH_DR:
+                            cost = self.op_ambush_dr(s)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
+                        elif op == OP_ASSASSINATE_DR:
+                            cost = self.op_assassinate_dr(s)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                     elif player.name == "SYNDICATE":
-                        if op == OP_BRIBE_SYN: cost = self.op_bribe_syn(s)
+                        if op == OP_BRIBE_SYN:
+                            cost = self.op_bribe_syn(s)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
                         elif op == OP_CONSTRUCT_SYN: cost = self.op_construct_syn(s)
                         elif op == OP_ASSASSINATE_DR and "Hitmen_Shaded" in self.capabilities:
                             cost = self.op_assassinate_hitmen(s)
+                            if cost is None:
+                                self.phase = PHASE_CHOOSE_TARGET_FACTION
+                                advance_turn = False
+                                cost = 0
 
                     if not self._sa_free:
                         # Special Activities usually don't have resource costs except Bribe, but cost is returned.

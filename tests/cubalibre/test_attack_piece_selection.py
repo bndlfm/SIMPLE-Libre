@@ -4,7 +4,7 @@ from app.environments.cubalibre.envs.env import CubaLibreEnv, OP_ATTACK_M26, PHA
 
 class TestAttackPieceSelection(unittest.TestCase):
     def setUp(self):
-        self.env = CubaLibreEnv(verbose=True)
+        self.env = CubaLibreEnv(verbose=True, manual=True)
         self.env.reset()
 
     def test_attack_selection(self):

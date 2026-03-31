@@ -46,10 +46,12 @@ class GovtOpsMixin:
 
         rev = 0
         cubes = int(sp.pieces[0]) + int(sp.pieces[1])
-        # Forest space (type 1) halves cubes
+        # Rule 3.2.3: Forest space (type 1) halves cubes
         budget = (cubes // 2) if sp.type == 1 else cubes
 
+        # Reveal from each faction while budget remains
         for idx in [2, 5, 8]:
+            if budget <= 0: break
             h = int(sp.pieces[idx])
             tr = min(h, budget)
             if tr > 0:
@@ -59,6 +61,7 @@ class GovtOpsMixin:
                 budget -= tr  # Consume budget
                 self._move_cash_between_piece_indices(sp, idx, idx + 1, tr)
         print(f" -> Revealed {rev}")
+        sp.update_control()
 
         return self.get_govt_cost()
 
@@ -115,6 +118,7 @@ class GovtOpsMixin:
             if len(eligible) > 1:
                 # Multiple targets: Player must choose.
                 self._pending_event_faction = {"event": "OP_ASSAULT", "allowed": eligible, "space": s, "context": context}
+                self.phase = PHASE_CHOOSE_TARGET_FACTION
                 return None
             else:
                 target_faction = eligible[0]
