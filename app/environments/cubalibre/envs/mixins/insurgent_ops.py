@@ -22,10 +22,12 @@ class InsurgentOpsMixin:
                     self._move_cash_between_piece_indices(sp, u, a, 1)
         return 1
 
-    def _op_attack_insurgent(self, s, u, a, b, target_type=None, removals_left=2, skip_roll=False, target_faction=None):
+    def _op_attack_insurgent(self, s, u, a, b, target_type=None, removals_left=2, skip_roll=False, target_faction=None, orig_event=None):
         sp = self.board.spaces[s]; cnt = int(sp.pieces[u] + sp.pieces[a])
-        print(f"ATTACK {sp.name} ({cnt})")
-        if cnt <= 0:
+        if target_faction is None and target_type is None:
+            print(f"ATTACK {sp.name} ({cnt})")
+
+        if cnt <= 0 and not skip_roll:
             print(" -> No guerrilla to Attack.")
             return 0
 
@@ -43,13 +45,15 @@ class InsurgentOpsMixin:
                 roll = self._roll_die()
 
             if roll > cnt:
-                print(" -> Fail")
+                print(f" -> Fail (Roll {roll} > Cnt {cnt})")
                 return 1
 
-        killed_count = 0
         current_removals = removals_left
-
         executing_faction = 1 if u == 2 else (2 if u == 5 else 3 if u == 8 else 0)
+
+        # Standard Attack (orig_event is None) uses priorities.
+        # Ambush/Assassinate/Bribe (orig_event set) allows free choice.
+        use_priority = (orig_event is None)
 
         def get_faction_pieces(f):
             if f == 0: return sp.pieces[0], sp.pieces[1], sp.govt_bases
@@ -58,41 +62,84 @@ class InsurgentOpsMixin:
             elif f == 3: return sp.pieces[8], sp.pieces[9], sp.pieces[10]
             return 0, 0, 0
 
-        def get_eligible_types(f):
-            ug, act, base = get_faction_pieces(f)
-            el = []
-            if ug > 0: el.append(0)
-            if act > 0: el.append(1)
-
-            if f == 3:
-                # "Attack cannot close Casinos if any Syndicate Guerrillas, Troops, or Police remain in the space"
-                if base > 0 and ug == 0 and act == 0 and sp.pieces[0] == 0 and sp.pieces[1] == 0:
-                    el.append(2)
-            else:
-                if base > 0 and ug == 0 and act == 0:
-                    el.append(2)
-            return el
-
         while current_removals > 0:
-             enemy_factions = []
-             for f in range(4):
-                 if f == executing_faction: continue
-                 if len(get_eligible_types(f)) > 0:
-                     enemy_factions.append(f)
+             eligible_targets = [] # list of (faction, type)
 
-             if not enemy_factions:
+             if use_priority:
+                 # Tier 1: Active/Cubes
+                 for f in range(4):
+                     if f == executing_faction: continue
+                     ug, act, base = get_faction_pieces(f)
+                     if f == 0:
+                         if ug > 0: eligible_targets.append((0, 0)) # Troops
+                         if act > 0: eligible_targets.append((0, 1)) # Police
+                     else:
+                         if act > 0: eligible_targets.append((f, 1))
+
+                 if not eligible_targets:
+                     # Tier 2: Bases/Casinos
+                     for f in range(4):
+                         if f == executing_faction: continue
+                         ug, act, base = get_faction_pieces(f)
+                         if base > 0:
+                             if f == 3: # Casino protection
+                                 if ug == 0 and act == 0 and sp.pieces[0] == 0 and sp.pieces[1] == 0:
+                                     eligible_targets.append((3, 2))
+                             else:
+                                 eligible_targets.append((f, 2))
+
+                 if not eligible_targets:
+                     # Tier 3: Underground
+                     for f in range(4):
+                         if f == executing_faction: continue
+                         if f == 0: continue # Govt has no UG
+                         ug, act, base = get_faction_pieces(f)
+                         if ug > 0: eligible_targets.append((f, 0))
+             else:
+                 # No priority: any enemy piece
+                 for f in range(4):
+                     if f == executing_faction: continue
+                     ug, act, base = get_faction_pieces(f)
+                     if f == 0:
+                         if ug > 0: eligible_targets.append((0, 0)) # Troops
+                         if act > 0: eligible_targets.append((0, 1)) # Police
+                         if base > 0: eligible_targets.append((0, 2)) # Base
+                     else:
+                         if ug > 0: eligible_targets.append((f, 0))
+                         if act > 0: eligible_targets.append((f, 1))
+                         if base > 0:
+                             if f == 3: # Casino protection
+                                 if ug == 0 and act == 0 and sp.pieces[0] == 0 and sp.pieces[1] == 0:
+                                     eligible_targets.append((3, 2))
+                             else:
+                                 eligible_targets.append((f, 2))
+
+             if not eligible_targets:
                   break
 
+             factions_in_tier = sorted(list(set(t[0] for t in eligible_targets)))
              chosen_faction = target_faction
-             target_faction = None
+             if chosen_faction is not None:
+                  target_faction = None # Reset for next loop iteration
 
              if chosen_faction is None:
-                  if len(enemy_factions) == 1:
-                       chosen_faction = enemy_factions[0]
+                  if len(factions_in_tier) == 1:
+                       chosen_faction = factions_in_tier[0]
+                  elif not self.manual:
+                       # Default faction priority: Govt > M26 > DR > Syndicate (unless executing)
+                       executing = 1 if u == 2 else (2 if u == 5 else 3 if u == 8 else 0)
+                       priority = [0, 1, 2, 3]
+                       if executing in priority:
+                            priority.remove(executing)
+                       for f_pref in priority:
+                            if f_pref in factions_in_tier:
+                                 chosen_faction = f_pref
+                                 break
                   else:
                        self._pending_event_faction = {
                             "event": "OP_ATTACK",
-                            "allowed": enemy_factions,
+                            "orig_event": orig_event,
+                            "allowed": factions_in_tier,
                             "removals_left": current_removals,
                             "space": s,
                             "u": u, "a": a, "b": b
@@ -100,20 +147,34 @@ class InsurgentOpsMixin:
                        self.phase = 6 # PHASE_CHOOSE_TARGET_FACTION
                        return None
 
-             el = get_eligible_types(chosen_faction)
-             if not el:
+             if chosen_faction not in factions_in_tier:
                   break
 
+             types_for_faction = sorted(list(set(t[1] for t in eligible_targets if t[0] == chosen_faction)))
              chosen_type = target_type
-             target_type = None
+             if chosen_type is not None:
+                  target_type = None # Reset for next loop iteration
 
              if chosen_type is None:
-                  if len(el) == 1:
-                       chosen_type = el[0]
+                  if len(types_for_faction) == 1:
+                       chosen_type = types_for_faction[0]
+                  elif not self.manual:
+                       # Automated piece selection
+                       if chosen_faction == 0:
+                            # Govt: Police > Troops > Base
+                            if 1 in types_for_faction: chosen_type = 1
+                            elif 0 in types_for_faction: chosen_type = 0
+                            else: chosen_type = 2
+                       else:
+                            # Insurgents: Active > Base > UG
+                            if 1 in types_for_faction: chosen_type = 1
+                            elif 2 in types_for_faction: chosen_type = 2
+                            else: chosen_type = 0
                   else:
                        self._pending_event_option = {
                             "event": "OP_ATTACK",
-                            "allowed": el,
+                            "orig_event": orig_event,
+                            "allowed": types_for_faction,
                             "removals_left": current_removals,
                             "space": s,
                             "u": u, "a": a, "b": b,
@@ -122,30 +183,33 @@ class InsurgentOpsMixin:
                        self.phase = 7 # PHASE_CHOOSE_EVENT_OPTION
                        return None
 
-             if chosen_faction == 0:
-                  if chosen_type == 0:
+             if int(chosen_faction) == 0:
+                  if int(chosen_type) == 0:
                        self.board.remove_piece(s, 0, 0)
                        print(" -> Killed Troop")
-                  elif chosen_type == 1:
+                  elif int(chosen_type) == 1:
                        self.board.remove_piece(s, 0, 1)
                        print(" -> Killed Police")
-                  elif chosen_type == 2:
+                  elif int(chosen_type) == 2:
                        sp.govt_bases -= 1
                        self.players[0].available_bases += 1
                        sp.update_control()
                        print(" -> Killed Govt Base")
              else:
-                  if chosen_type == 2 and chosen_faction == 3:
+                  if int(chosen_type) == 2 and int(chosen_faction) == 3:
                        sp.pieces[10] -= 1
                        sp.closed_casinos += 1
                        sp.update_control()
                        print(" -> Closed Casino")
                   else:
-                       self.board.remove_piece(s, chosen_faction, chosen_type)
-                       piece_name = "UG" if chosen_type == 0 else "Active" if chosen_type == 1 else "Base"
+                       self.board.remove_piece(s, int(chosen_faction), int(chosen_type))
+                       piece_name = "UG" if int(chosen_type) == 0 else "Active" if int(chosen_type) == 1 else "Base"
                        print(f" -> Killed {piece_name} of faction {chosen_faction}")
 
-             killed_count += 1
+             if orig_event == "OP_BRIBE_SYN":
+                 self.players[int(chosen_faction)].resources = min(49, self.players[int(chosen_faction)].resources + 3)
+                 print(f" -> Bribe: {self.players[int(chosen_faction)].name} gained 3 resources.")
+
              current_removals -= 1
 
         self._queue_cash_transfers_for_space(sp)
@@ -219,12 +283,23 @@ class InsurgentOpsMixin:
         sp=self.board.spaces[s]; p=self.players[f]; print(f"{p.name}: RALLY {sp.name}")
         can_loc=True
         if p.name=="DR": can_loc=(sp.type in [0,4] or sp.pieces[b]>0)
-        cap=sp.population+sp.pieces[b]
-        if cap==0 and sp.type in [1,3] and p.name=="M26": cap=1
+
+        # Rule 3.3.1: Rally Capacities
+        if p.name == "M26":
+            cap = 2 * (int(sp.population) + int(sp.pieces[b]))
+            if cap == 0 and sp.type in [1, 3]: cap = 1
+        elif p.name == "SYNDICATE":
+            cap = 1 # Single guerrilla
+        else:
+            cap = int(sp.population) + int(sp.pieces[b])
+
         if (p.available_forces[sup]>0) and cap>0 and can_loc:
+            placed = 0
             for _ in range(cap):
-                if p.available_forces[sup]>0: sp.pieces[u]+=1; p.available_forces[sup]-=1
-            print(f" -> Placed (Cap {cap})")
+                if p.available_forces[sup]>0:
+                    sp.pieces[u]+=1; p.available_forces[sup]-=1
+                    placed += 1
+            print(f" -> Placed {placed} (Cap {cap})")
         else:
             while sp.pieces[a]>0:
                 sp.pieces[a]-=1
@@ -242,13 +317,37 @@ class InsurgentOpsMixin:
 
     def op_rally_m26(self, s): return self._op_rally_generic(s,2,3,4,1,0)
 
-    def op_ambush_m26(self, s):
-        sp=self.board.spaces[s]; print(f"M26: AMBUSH {sp.name}"); k=0
-        for _ in range(2):
-            if sp.pieces[1]>0: sp.pieces[1]-=1; k+=1
-            elif sp.pieces[0]>0: sp.pieces[0]-=1; k+=1
-            elif sp.govt_bases>0: sp.govt_bases-=1; k+=1
-        print(f" -> Killed {k}"); return 1
+    def op_ambush_m26(self, s, target_type=None, removals_left=2, target_faction=None):
+        sp = self.board.spaces[s]
+        # Ambush rule 4.3.2: remove 2 enemy pieces (automatic success),
+        # AND add an available guerrilla (Underground).
+        res = self._op_attack_insurgent(s, 2, 3, 4, target_type=target_type, removals_left=removals_left, skip_roll=True, target_faction=target_faction, orig_event="OP_AMBUSH_M26")
+        if res is None:
+            return None # Still selecting targets
+
+        # Attack logic handles removal. Now add the guerrilla if it was the start of the action.
+        # We only add it when we are NOT resuming (target_faction is None)
+        if target_faction is None and target_type is None:
+            if self.players[1].available_forces[0] > 0:
+                sp.pieces[2] += 1
+                self.players[1].available_forces[0] -= 1
+                print(" -> M26 Ambush: Added UG Guerrilla.")
+            sp.update_control()
+        return 1
+
+    def op_ambush_dr(self, s, target_type=None, removals_left=2, target_faction=None):
+        sp = self.board.spaces[s]
+        # Rule 4.4.2: same as M26 but DR pieces.
+        res = self._op_attack_insurgent(s, 5, 6, 7, target_type=target_type, removals_left=removals_left, skip_roll=True, target_faction=target_faction, orig_event="OP_AMBUSH_DR")
+        if res is None:
+            return None
+        if target_faction is None and target_type is None:
+            if self.players[2].available_forces[0] > 0:
+                sp.pieces[5] += 1
+                self.players[2].available_forces[0] -= 1
+                print(" -> DR Ambush: Added UG Guerrilla.")
+            sp.update_control()
+        return 1
 
     def op_kidnap_m26(self, s, target_faction=None):
         sp = self.board.spaces[s]
@@ -300,13 +399,13 @@ class InsurgentOpsMixin:
                 roll2 = self._roll_die()
                 if roll2 > roll: roll = roll2
 
-            st = min(roll, self.players[target_faction].resources)
-            self.players[target_faction].resources -= st
-            self.players[1].resources += st
+            st = min(roll, int(self.players[target_faction].resources))
+            self.players[target_faction].resources = int(self.players[target_faction].resources) - st
+            self.players[1].resources = int(self.players[1].resources) + st
             print(f" -> M26 Kidnap: Took {st} Resources from {target_faction} (roll {roll})")
 
             if "Raul_Shaded" in self.capabilities:
-                self.shift_aid(2 * int(st))
+                self.set_aid(int(self.aid) + 2 * st)
 
         if sp.pieces[10] > 0:
             sp.pieces[10] -= 1
@@ -318,23 +417,35 @@ class InsurgentOpsMixin:
 
     def op_rally_dr(self, s): return self._op_rally_generic(s,5,6,7,2,0)
 
-    def op_assassinate_dr(self, s):
-        self._op_terror_insurgent(s,5,6); print("DR: ASSASSINATE"); sp=self.board.spaces[s]
-        if sp.pieces[1]>0: sp.pieces[1]-=1
-        elif sp.pieces[0]>0: sp.pieces[0]-=1
-        return 1
+    def op_assassinate_dr(self, s, target_type=None, target_faction=None):
+        # Assassinate Rule 4.4.3: removes ANY 1 enemy piece.
+        if target_faction is None and target_type is None:
+            self._op_terror_insurgent(s, 5, 6)
+            print("DR: ASSASSINATE")
 
-    def op_assassinate_hitmen(self, s):
-        self._op_terror_insurgent(s,8,9); print("SYN: HITMEN ASSASSINATE"); sp=self.board.spaces[s]
-        if sp.pieces[1]>0: sp.pieces[1]-=1
-        elif sp.pieces[0]>0: sp.pieces[0]-=1
-        return 1
+        res = self._op_attack_insurgent(s, 5, 6, 7, target_type=target_type, removals_left=1, skip_roll=True, target_faction=target_faction, orig_event="OP_ASSASSINATE_DR")
+        return res
+
+    def op_assassinate_hitmen(self, s, target_type=None, target_faction=None):
+        if target_faction is None and target_type is None:
+            self._op_terror_insurgent(s, 8, 9)
+            print("SYN: HITMEN ASSASSINATE")
+
+        res = self._op_attack_insurgent(s, 8, 9, 10, target_type=target_type, removals_left=1, skip_roll=True, target_faction=target_faction, orig_event="OP_ASSASSINATE_HITMEN")
+        return res
 
     def op_rally_syn(self, s): return self._op_rally_generic(s,8,9,10,3,0)
 
-    def op_bribe_syn(self, s):
-        print("SYN: BRIBE"); st=min(2,self.players[0].resources)
-        self.players[0].resources-=st; self.players[3].resources+=st; return 1
+    def op_bribe_syn(self, s, target_type=None, target_faction=None):
+        # Rule 4.5.4: Bribe removes or flips pieces at cost of 3 resources.
+        # "Remove up to 2 cubes, remove or flip up to 2 Guerrillas, or remove an enemy Base."
+        if target_faction is None and target_type is None:
+            print("SYN: BRIBE")
+
+        res = self._op_attack_insurgent(s, 8, 9, 10, target_type=target_type, removals_left=2, skip_roll=True, target_faction=target_faction, orig_event="OP_BRIBE_SYN")
+        if res is not None:
+            return 3 # Cost is 3
+        return None
 
     def op_construct_syn(self, s):
         print("SYN: CONSTRUCT"); self.board.spaces[s].pieces[10]+=1; self.players[3].available_bases-=1; return 1

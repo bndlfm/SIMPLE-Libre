@@ -30,7 +30,7 @@ class CubaLibreEnv(StepMixin, LegalActionsMixin, PropagandaMixin, GovtOpsMixin, 
         self.verbose = verbose
         self.num_spaces = 13
         self.space_feature_size = 13 
-        self.num_ops = 26
+        self.num_ops = 27
 
         # Action space is now partitioned into 3 regions:
         # - Main-choice actions

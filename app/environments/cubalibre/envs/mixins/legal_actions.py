@@ -721,8 +721,9 @@ class LegalActionsMixin:
                         u,a = 2,3
                         cnt = s.pieces[u]+s.pieces[a]
                         has_govt = (s.pieces[0]+s.pieces[1]+s.govt_bases)>0
-                        # Ambush: Any space with M26 guerrillas and govt (no terrain restriction)
-                        if cnt>0 and has_govt:
+                        # Ambush: Any space with M26 guerrillas and any enemy
+                        enemies = sum(s.pieces[5:11]) + (s.pieces[0] + s.pieces[1] + s.govt_bases)
+                        if cnt>0 and enemies>0:
                             sa_mask[OP_AMBUSH_M26*13+s_id]=1
                         # Kidnap: City/EC/Sierra Maestra (with capability) + M26 guerrillas > Police + open casino (or City/EC)
                         allow_loc = (s.type in [0,4])  # City or EC
@@ -743,12 +744,24 @@ class LegalActionsMixin:
                         s = self.board.spaces[s_id]
                         u,a = 5,6
                         cnt = s.pieces[u]+s.pieces[a]
-                        has_govt = (s.pieces[0]+s.pieces[1]+s.govt_bases)>0
+                        # Ambush: Any space with DR guerrillas and any enemy
+                        enemies = sum(s.pieces[2:5]) + sum(s.pieces[8:11]) + (s.pieces[0] + s.pieces[1] + s.govt_bases)
+                        if cnt>0 and enemies>0:
+                            if (OP_AMBUSH_DR * 13 + s_id) < len(sa_mask):
+                                sa_mask[OP_AMBUSH_DR*13+s_id]=1
+
+                        # Assassinate: City or EC where DR > Police, targets any enemy.
+                        # Rule 4.4.3: "DR Guerrillas outnumber Police."
                         dr_count = int(s.pieces[u] + s.pieces[a])
                         police_count = int(s.pieces[1])
-                        # Assassinate: City or EC where DR > Police.
-                        if s.type in [0, 4] and cnt > 0 and has_govt and dr_count > police_count and not self._pact_blocks_opposition(self.current_player_num):
-                            sa_mask[OP_ASSASSINATE_DR*13+s_id] = 1
+                        if s.type in [0, 4] and cnt > 0 and enemies > 0 and dr_count > police_count and not self._pact_blocks_opposition(self.current_player_num):
+                            if (OP_ASSASSINATE_DR * 13 + s_id) < len(sa_mask):
+                                sa_mask[OP_ASSASSINATE_DR*13+s_id] = 1
+
+                        # Ambush: Rule 4.4.2
+                        if cnt > 0 and enemies > 0:
+                             if (OP_AMBUSH_DR * 13 + s_id) < len(sa_mask):
+                                  sa_mask[OP_AMBUSH_DR * 13 + s_id] = 1
             elif player.name == "SYNDICATE":
                 can_afford = player.resources >= 1
                 if can_afford:

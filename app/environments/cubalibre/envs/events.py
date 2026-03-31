@@ -98,30 +98,38 @@ def evt_armored_cars(env, play_shaded):
         print(" -> Capability Added: 'ArmoredCars_Shaded'")
 
 
-def _free_ambush_against_govt(env, space_id):
-    sp = env.board.spaces[space_id]
-    kills = 0
-    for _ in range(2):
-        if sp.pieces[1] > 0:
-            sp.pieces[1] -= 1; kills += 1
-        elif sp.pieces[0] > 0:
-            sp.pieces[0] -= 1; kills += 1
-        elif sp.govt_bases > 0:
-            sp.govt_bases -= 1; kills += 1
-    print(f" -> Killed {kills} Govt pieces.")
+def _free_ambush_against_govt(env, space_id, u=2, a=3, b=4):
+    # Rule 4.3.2: Ambush removes 2 enemy pieces.
+    # If multiple enemies, we should ideally pause for selection.
+    # But for some simple events, we might want a helper.
+    # Let's transition to the generic attack logic instead of this hardcoded helper.
+    return env._op_attack_insurgent(space_id, u, a, b, removals_left=2, skip_roll=True)
 
 
-def _free_ambush_against_govt_bases_first(env, space_id):
+def _free_ambush_against_govt_bases_first(env, space_id, u=2, a=3, b=4):
+    # Used by Rebel Air Force (Unshaded)
+    # "Remove Bases first"
+    # For now, we still use simplified priority logic but with parameterized pieces
     sp = env.board.spaces[space_id]
+
+    # Check if there are ANY guerrillas to perform the ambush
+    if int(sp.pieces[u] + sp.pieces[a]) <= 0:
+        print(f" -> No guerrilla in {sp.name} to Ambush.")
+        return 0
+
     kills = 0
     for _ in range(2):
         if sp.govt_bases > 0:
-            sp.govt_bases -= 1; kills += 1
+            sp.govt_bases -= 1
+            env.players[0].available_bases += 1
+            kills += 1
         elif sp.pieces[1] > 0:
-            sp.pieces[1] -= 1; kills += 1
+            env.board.remove_piece(space_id, 0, 1); kills += 1
         elif sp.pieces[0] > 0:
-            sp.pieces[0] -= 1; kills += 1
+            env.board.remove_piece(space_id, 0, 0); kills += 1
+    sp.update_control()
     print(f" -> Killed {kills} Govt pieces (Bases first).")
+    return 1
 
 
 # --- CARD 2: GUANTANAMO BAY ---

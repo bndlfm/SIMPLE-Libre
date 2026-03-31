@@ -5,7 +5,7 @@ from app.environments.cubalibre.envs.env import CubaLibreEnv
 
 class Test_test_attack_against_multiple_enemy_factions(unittest.TestCase):
     def setUp(self):
-        self.env = CubaLibreEnv(verbose=False)
+        self.env = CubaLibreEnv(verbose=False, manual=True)
         self.env.reset(seed=42)
 
     def test_attack_against_multiple_enemy_factions(self):
@@ -26,9 +26,17 @@ class Test_test_attack_against_multiple_enemy_factions(unittest.TestCase):
 
         self.env.current_player_num = 1 # M26
 
-        # Trigger attack insurgent
-        # Removals=1. Since both Govt and DR are unprotected enemies, it should pause for faction selection.
-        self.env._op_attack_insurgent(3, 2, 3, 4, skip_roll=True, removals_left=1)
+        # Trigger attack insurgent via step() to ensure phase transitions are handled correctly.
+        # Op Action = OpsBase + (Op_ID * NumSpaces) + SpaceID
+        # M26 Attack ID = 9. Havana ID = 3.
+        action_id = self.env._ops_action_base + (9 * self.env.num_spaces) + 3
+
+        # We need to be in the correct phase and resources
+        self.env.phase = 2 # PHASE_CHOOSE_OP_ACTION
+        self.env.players[1].resources = 10
+        self.env.players[1].eligible = True
+
+        self.env.step(action_id)
 
         self.assertEqual(self.env.phase, 6, "Should pause to choose faction")
 
